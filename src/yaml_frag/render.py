@@ -16,6 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .models import OutputSpec, ProjectConfig, RenderResult, Variables
+from .sources import CommandRunner
 
 #: Literal token an output template may contain; replaced by the serialized
 #: YAML during :func:`compose_output`. See PLAN.md "Project configuration".
@@ -34,25 +35,31 @@ def render_target(
     fragments_dir: Path,
     cli_variables: Variables | None = None,
     secrets_path: Path | None = None,
+    runner: CommandRunner | None = None,
     validate: bool = True,
 ) -> RenderResult:
     """Render a single target in memory.
 
     Steps (PLAN.md "Rendering algorithm"):
     1. load + validate inventory;
-    2. resolve defaults/groups/target (fragment order + variable map);
-    3. load secrets overlay if ``secrets_path`` is given;
+    2. resolve defaults/groups/target (fragment order + LAYERED-but-unresolved
+       variable map) via :func:`inventory.resolve_target`;
+    3. load the secret store from ``secrets_path`` (empty if not given), then
+       resolve every variable source to a concrete value via
+       :func:`yaml_frag.sources.resolve_variables` (executing any ``capture``
+       subprocesses through ``runner``, default :class:`~sources.DefaultCommandRunner`);
     4. load + validate every referenced fragment;
     5. start from an empty document ``{}``;
     6. for each fragment in order: check required variables, render templates
-       with the target's variables, apply operations in listed order while
+       with the RESOLVED variables, apply operations in listed order while
        recording provenance, evaluating ``assert`` operations as encountered;
     7. run generic validation (unresolved-marker check + optional
        ``config.output.schema``) unless ``validate`` is False;
     8. return the :class:`~models.RenderResult`.
 
-    Serialization and output templating happen in :func:`compose_output`, not
-    here. No document-type knowledge lives in this function.
+    ``runner`` is injectable so tests can resolve captures deterministically
+    without running real programs. Serialization and output templating happen in
+    :func:`compose_output`, not here. No document-type knowledge lives here.
     """
     raise NotImplementedError
 

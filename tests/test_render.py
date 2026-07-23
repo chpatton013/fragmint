@@ -22,7 +22,8 @@ def test_snapshot_matches_expected(target: str) -> None:
 
 def test_gb10_matches_plan_expected_render() -> None:
     """gb10-01 renders the expected YAML in PLAN.md 'Complete expected render'
-    (acceptance criterion 16)."""
+    (acceptance criterion 17), using a stubbed CommandRunner for the
+    capture-derived password hash."""
     raise NotImplementedError
 
 

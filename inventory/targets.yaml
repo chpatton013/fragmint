@@ -58,7 +58,13 @@ targets:
       - autoinstall/checks
     variables:
       identity_hostname: gb10-01
-      identity_password_hash: "$6$example-salt$example-hash"
+      # Computed at render time: feed the plaintext password secret to
+      # `openssl passwd -6` on stdin and capture the resulting hash.
+      # See PLAN.md "Variable value sources". Requires --secrets.
+      identity_password_hash:
+        from: capture
+        command: [openssl, passwd, -6, -stdin]
+        stdin: { from: secret, name: gb10-01_password }
       primary_interface: enP7s7
 
   gb10-02:
@@ -70,7 +76,10 @@ targets:
       - autoinstall/checks
     variables:
       identity_hostname: gb10-02
-      identity_password_hash: "$6$example-salt$example-hash"
+      identity_password_hash:
+        from: capture
+        command: [openssl, passwd, -6, -stdin]
+        stdin: { from: secret, name: gb10-02_password }
       primary_interface: enP7s7
 
   generic-vm-01:
@@ -82,5 +91,8 @@ targets:
       - autoinstall/checks
     variables:
       identity_hostname: generic-vm-01
-      identity_password_hash: "$6$example-salt$example-hash"
+      identity_password_hash:
+        from: capture
+        command: [openssl, passwd, -6, -stdin]
+        stdin: { from: secret, name: generic-vm-01_password }
       primary_interface: enp1s0

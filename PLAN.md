@@ -126,7 +126,8 @@ yaml-frag/
 ├── pyproject.toml
 ├── yaml-frag.yaml              # project configuration
 ├── inventory/
-│   └── targets.yaml
+│   ├── targets.yaml
+│   └── secrets.example.yaml    # copy to secrets.yaml (git-ignored)
 ├── fragments/                  # any nested layout the project likes
 │   ├── autoinstall/
 │   │   ├── base.yaml
@@ -143,7 +144,8 @@ yaml-frag/
 ├── schemas/
 │   ├── inventory.schema.json
 │   ├── fragment.schema.json
-│   └── project.schema.json
+│   ├── project.schema.json
+│   └── secrets.schema.json
 ├── templates/
 │   └── user-data.tmpl          # output template (adds "#cloud-config")
 ├── rendered/
@@ -166,6 +168,7 @@ yaml-frag/
         ├── render.py
         ├── provenance.py
         ├── validation.py
+        ├── sources.py          # variable value sources (literal/secret/capture)
         ├── yamlio.py
         ├── pointer.py
         ├── templating.py
@@ -292,36 +295,110 @@ autoinstall/checks
 
 ## Variable precedence
 
-Variables are layered in this order (later wins):
+Variable *definitions* are layered in this order (later wins):
 
 1. inventory `defaults.variables`;
 2. group variables, in the target's group order;
 3. target variables;
-4. secret overlay (see below);
-5. CLI overrides (`--var KEY=VALUE`).
-
-CLI overrides:
+4. CLI overrides (`--var KEY=VALUE`, always literal strings).
 
 ```bash
 yaml-frag render gb10-01 --var identity_hostname=test-gb10
 ```
 
-## Optional external secret variables
+A later layer's definition fully replaces an earlier one — including replacing a
+literal with a source or vice versa. Layering happens first; a definition may be
+a literal or a `from:` source (see "Variable value sources"). Resolution of
+sources happens once, *after* layering and *before* templating. Secrets are not
+a precedence layer; they are a named store referenced explicitly.
 
-Support an optional untracked secrets file, merged after target variables but
-before CLI overrides:
+---
+
+# Variable value sources
+
+A variable value is one of three sources, distinguished by an optional `from:`
+key. A mapping is a source only when its `from` value is one of `literal`,
+`secret`, or `capture`; anything else (scalar, list, or mapping without that
+discriminator) is a literal. This keeps ordinary values unchanged while making
+non-literal sources explicit.
+
+```yaml
+keyboard_layout: us                       # literal (unchanged)
+
+identity_password:                        # secret reference
+  from: secret
+  name: gb10-01_password
+
+identity_password_hash:                   # subprocess capture
+  from: capture
+  command: [openssl, passwd, -6, -stdin]  # each element may itself be a source
+  stdin: { from: secret, name: gb10-01_password }
+  trim: true                              # strip one trailing newline (default)
+
+weird_literal:                            # escape hatch: a literal mapping that
+  from: literal                           #   itself contains a `from` key
+  value: { from: "us-east-1" }
+```
+
+Rules:
+
+* **literal** — used verbatim. The default for untagged values; the tagged form
+  `{from: literal, value: ...}` exists only as an escape hatch.
+* **secret** — `{from: secret, name: NAME}` looks `NAME` up in the secret store
+  (see "Secrets"). A missing name fails closed (`SecretNotFoundError`).
+* **capture** — `{from: capture, command: [...], stdin: <source?>, trim: bool}`
+  runs a subprocess and uses its stdout. Sources **nest**: each `command`
+  element and the optional `stdin` are themselves sources (literal or secret),
+  so arguments and stdin can come from literals or secrets.
+
+Variables do not reference other variables in this version (future extension).
+
+## Security
+
+* Captures run with an argv list and `shell=False` — never a shell string, so
+  there is no shell-injection surface. `command` must be a list.
+* A bounded timeout applies; a nonzero exit, timeout, or missing program raises
+  `CaptureError` with the command name and stderr, and secret-sourced arguments
+  redacted.
+* Resolved secret values and secret-sourced arguments/stdin are never logged.
+* A variable defined via `secret` or `capture` is treated as sensitive and
+  redacted in `inspect`/`explain` regardless of its name.
+
+## Determinism
+
+Captures make output environment-dependent, and some (e.g. `openssl passwd -6`,
+which uses a random salt) are non-deterministic. For reproducible snapshot
+tests, inject a deterministic `CommandRunner` stub (see "Testing requirements");
+real renders of such variables will differ run to run by design.
+
+## Resolution timing
+
+Captures execute only when a document is actually rendered (`render`,
+`render-all`, and the in-memory render behind `validate`). `inspect` and
+`explain` do **not** execute captures or reveal secrets — they show a redacted
+description such as `<capture: openssl passwd -6 -stdin>` or
+`<secret gb10-01_password>`.
+
+---
+
+# Secrets
+
+Secrets live in an optional, untracked file passed with `--secrets`. It is a
+flat named store referenced by `from: secret` sources — not a precedence layer.
 
 ```bash
 yaml-frag render gb10-01 --secrets inventory/secrets.yaml
 ```
 
 ```yaml
-targets:
-  gb10-01:
-    identity_password_hash: "$6$..."
+secrets:
+  gb10-01_password: "correct horse battery staple"
 ```
 
-The renderer must never log secret values.
+A tracked `inventory/secrets.example.yaml` documents the shape;
+`inventory/secrets.yaml` is git-ignored. The renderer must never log secret
+values or write them to diagnostics; they appear only where a fragment places a
+resolved value into the output document.
 
 ---
 
@@ -750,7 +827,7 @@ Writes the configured output path. Options:
 --inventory PATH
 --fragments-dir PATH
 --output PATH            override the destination path for this render
---secrets PATH
+--secrets PATH           named secret store for `from: secret` sources
 --var KEY=VALUE
 --validator NAME         run a named validator (repeatable)
 --stdout                 print rendered output to stdout instead of writing
@@ -824,8 +901,11 @@ variables:
 ```
 
 Automatically redact variables whose names contain any of: `password`,
-`secret`, `token`, `private`, `credential`. Provide `--show-secrets` to reveal
-full values.
+`secret`, `token`, `private`, `credential`, and any variable defined via a
+`secret` or `capture` source regardless of name. Sources are shown as a
+non-executing description (e.g. `<capture: openssl passwd -6 -stdin>`) rather
+than run. Provide `--show-secrets` to reveal full values (still without
+executing captures).
 
 ---
 
@@ -876,12 +956,16 @@ TemplateRenderError
 MergeConflictError
 AssertionFailedError
 ValidationError
+VariableResolutionError   (base for SecretNotFoundError, CaptureError)
 UnknownTargetError
 UnknownFragmentError
 ```
 
-Every user-facing error must include enough context to find the source file and
-operation.
+Variable value sources live in `sources.py`, which exposes a `CommandRunner`
+protocol (with a `subprocess`-backed default) so capture execution is isolated
+and injectable for tests. Every user-facing error must include enough context
+to find the source file and operation — but never the value of a secret or a
+secret-sourced argument.
 
 ---
 
@@ -932,6 +1016,9 @@ The repository ships a complete example that renders Ubuntu 24.04 autoinstall
 * `fragments/autoinstall/base.yaml`, `default-user.yaml`, and `checks.yaml`,
   `fragments/ubuntu-24.04.yaml`, `fragments/hardware/*`, `fragments/roles/*`,
   and `fragments/hosts/*` build and assert the document.
+* each target's `identity_password_hash` is a `capture` source that runs
+  `openssl passwd -6` over the plaintext password held in the secret store
+  (`inventory/secrets.example.yaml` shows the shape).
 * No autoinstall knowledge exists in `src/yaml_frag/`.
 
 ## Complete expected render (target `gb10-01`)
@@ -951,7 +1038,9 @@ autoinstall:
   identity:
     hostname: gb10-01
     username: chris
-    password: "$6$example-salt$example-hash"
+    # Derived at render time from the gb10-01_password secret via
+    # `openssl passwd -6`; the exact hash varies per run (random salt).
+    password: "$6$...$..."
   storage:
     layout:
       name: lvm
@@ -991,7 +1080,10 @@ autoinstall:
 ```
 
 Blank-line placement need not match exactly, but the YAML data and the
-`#cloud-config` header must.
+`#cloud-config` header must. The `identity.password` value is derived from a
+capture source and is non-deterministic; snapshot tests inject a deterministic
+`CommandRunner` stub so the committed fixtures stay byte-stable (see "Testing
+requirements").
 
 ---
 
@@ -1008,7 +1100,16 @@ provenance recording; override warning.
 ## Inventory tests
 
 default/group/target/CLI variable precedence; group order; fragment order;
-missing groups; missing fragments; duplicate targets; secret overlay.
+missing groups; missing fragments; duplicate targets.
+
+## Variable-source tests (`sources.py`)
+
+source detection (`from:` discriminator vs literal, incl. the `from: literal`
+escape hatch); secret resolution and `SecretNotFoundError`; capture resolution
+with a stubbed `CommandRunner` (command args and stdin sourced from
+literals/secrets); `trim` behavior; capture failure -> `CaptureError` with
+stderr and redacted secret-sourced args; sensitive-by-source redaction; captures
+NOT executed by `inspect`/`explain`. Never run real subprocesses in unit tests.
 
 ## Config tests
 
@@ -1020,6 +1121,8 @@ load defaults; output path substitution; output template injection of
 Render representative targets and compare with committed expected files:
 `generic-vm-01`, `gb10-01`, `gb10-02`. The two GB10 hosts differ only in
 host-specific variables unless their inventory selects different fragments.
+Inject a deterministic `CommandRunner` stub so the capture-derived
+`identity_password_hash` is byte-stable across runs.
 
 ## CLI tests
 
@@ -1048,6 +1151,7 @@ gb10-01: fragment hardware/gb10, operation 2: missing required variable "primary
 5  merge conflict
 6  rendered-document validation failure (generic validation, schema, assertion, or validator)
 7  project-configuration error
+8  variable-resolution failure (secret not found, or capture subprocess failed)
 ```
 
 Values may change but must be documented and tested.
@@ -1058,10 +1162,11 @@ Values may change but must be documented and tested.
 
 Do not implement: a web interface; dynamic Python plugins; arbitrary template
 code execution; array-index mutation; semantic merging of list entries;
-key-aware list merges; multiple output files per target; automatic hardware
-discovery; PXE/TFTP/DHCP configuration; deployment to HTTP servers; secret
-manager integration; reimplementing any full document schema (e.g. Subiquity);
-running Ansible; installing Ubuntu.
+key-aware list merges; multiple output files per target; variables that
+reference other variables; automatic hardware discovery; PXE/TFTP/DHCP
+configuration; deployment to HTTP servers; secret-manager integration
+(the secret store is a plain file); reimplementing any full document schema
+(e.g. Subiquity); running Ansible; installing Ubuntu.
 
 The renderer's job is to produce correct, inspectable YAML artifacts.
 
@@ -1092,16 +1197,22 @@ Do not implement these at the expense of a clear first version.
 8. Fragments can replace kernel, storage, and network configuration.
 9. Target variables can supply hostname, username, password hash, SSH identity,
    and interface name.
-10. The renderer explains where final values came from.
-11. Secret-looking values are redacted from inspection output.
-12. Invalid config, inventory, fragments, or rendered documents return nonzero.
-13. Document-specific requirements are enforced via fragment assertions and
+10. A variable value can be a literal, a named secret reference, or the captured
+    stdout of a subprocess whose arguments/stdin come from literals or secrets
+    (e.g. `identity_password_hash` from `openssl passwd -6`).
+11. The renderer explains where final values came from.
+12. Secret-looking values, and any secret- or capture-sourced variable, are
+    redacted from inspection output; `inspect`/`explain` never execute captures.
+13. Invalid config, inventory, fragments, rendered documents, or unresolvable
+    variable sources return nonzero.
+14. Document-specific requirements are enforced via fragment assertions and
     project-configured validators, not built-in renderer logic.
-14. Named validators are selectable with `--validator`.
-15. Tests cover merge, precedence, config, rendering, provenance, and CLI.
-16. The example autoinstall project renders the expected `gb10-01` output above.
-17. The README explains installation, structure, project config, fragment and
-    inventory authoring, and CLI usage.
+15. Named validators are selectable with `--validator`.
+16. Tests cover merge, precedence, sources, config, rendering, provenance, and
+    CLI.
+17. The example autoinstall project renders the expected `gb10-01` output above.
+18. The README explains installation, structure, project config, secrets,
+    fragment and inventory authoring, and CLI usage.
 
 ---
 

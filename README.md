@@ -102,9 +102,33 @@ targets:
   order) → target fragments. Precedence is purely positional; the renderer never
   reorders.
 - **Variable precedence** (later wins): defaults → group vars (in order) → target
-  vars → secrets overlay → `--var` CLI overrides.
-- **Secrets**: pass `--secrets inventory/secrets.yaml` (git-ignored) with
-  `targets.<name>.<var>` entries. Never logged.
+  vars → `--var` CLI overrides.
+
+### Variable value sources
+
+A variable's value is a **literal** (default), a **secret** reference, or the
+captured **stdout of a subprocess**. Sources nest — a capture's args and stdin
+can be literals or secrets:
+
+```yaml
+identity_password_hash:                     # run openssl over a secret password
+  from: capture
+  command: [openssl, passwd, -6, -stdin]
+  stdin: { from: secret, name: gb10-01_password }
+```
+
+Secrets come from a flat named store passed with `--secrets` (git-ignored; see
+`inventory/secrets.example.yaml`):
+
+```yaml
+secrets:
+  gb10-01_password: "..."
+```
+
+Captures run only when rendering (never during `inspect`/`explain`), use an argv
+list (no shell), and are treated as sensitive — secret/capture variables are
+redacted regardless of name. Captures can be non-deterministic (e.g. `openssl
+passwd -6` uses a random salt).
 
 ## Authoring fragments
 
@@ -158,7 +182,8 @@ Common options: `--config`, `--inventory`, `--fragments-dir`, `--output`,
 
 `0` success · `1` render failure · `2` usage · `3` inventory validation ·
 `4` fragment validation · `5` merge conflict · `6` rendered-document validation
-(generic check, schema, assertion, or validator) · `7` project-config error.
+(generic check, schema, assertion, or validator) · `7` project-config error ·
+`8` variable-resolution failure (secret not found / capture failed).
 
 ## Development
 

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .models import Inventory, ResolvedTarget, Variables
+from .models import Inventory, ResolvedTarget, SecretStore, Variables
 
 
 def load_inventory(path: Path) -> Inventory:
@@ -37,9 +37,8 @@ def resolve_target(
     target_name: str,
     *,
     cli_variables: Variables | None = None,
-    secrets: Variables | None = None,
 ) -> ResolvedTarget:
-    """Resolve one target's final fragments and variables.
+    """Resolve one target's final fragments and (still-unresolved) variables.
 
     Fragment order (PLAN.md "Fragment ordering") — precedence is positional:
         1. inventory ``defaults.fragments``
@@ -51,12 +50,12 @@ def resolve_target(
         1. inventory ``defaults.variables``
         2. group variables, in target group order
         3. target variables
-        4. ``secrets`` (per-target overlay; see below)
-        5. ``cli_variables``
+        4. ``cli_variables`` (always literal strings)
 
-    ``secrets`` here is the already-extracted per-target mapping from the
-    optional secrets file (see :func:`load_secrets`). Secret values must never
-    be logged (PLAN.md "Optional external secret variables").
+    The returned ``variables`` are LAYERED BUT UNRESOLVED: a value may be an
+    untagged literal or a ``from:`` source mapping. Secrets are no longer a
+    precedence layer; they are a named store referenced via ``from: secret`` and
+    resolved later by :func:`yaml_frag.sources.resolve_variables`.
 
     Raise :class:`~yaml_frag.errors.UnknownTargetError` for an unknown target
     and :class:`~yaml_frag.errors.InventoryError` for a referenced-but-undefined
@@ -65,11 +64,12 @@ def resolve_target(
     raise NotImplementedError
 
 
-def load_secrets(path: Path, target_name: str) -> Variables:
-    """Load the optional untracked secrets overlay for a single target.
+def load_secret_store(path: Path) -> SecretStore:
+    """Load the optional untracked secrets file into a :class:`SecretStore`.
 
-    The secrets file shape is ``{targets: {<name>: {<var>: <value>}}}``
-    (PLAN.md "Optional external secret variables"). Return an empty mapping if
-    the target has no secrets entry. Never log the returned values.
+    The file shape is ``{secrets: {<name>: <value>}}`` (PLAN.md "Secrets").
+    A missing file is only an error if a ``from: secret`` reference later needs
+    it; callers may pass an empty store when no ``--secrets`` file is given.
+    Never log the returned values.
     """
     raise NotImplementedError

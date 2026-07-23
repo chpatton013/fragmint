@@ -29,3 +29,6 @@ class ExitCode(IntEnum):
     RENDERED_VALIDATION = 6
     #: The project-configuration file is missing or invalid.
     CONFIG_ERROR = 7
+    #: A variable value source could not be resolved (secret not found, or a
+    #: capture subprocess failed).
+    VARIABLE_RESOLUTION = 8

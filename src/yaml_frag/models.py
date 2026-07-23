@@ -28,8 +28,59 @@ YamlValue = Union[
     dict[str, "YamlValue"],
 ]
 
-#: The flat variable map used for template rendering and required-variable checks.
+#: The flat variable map used for template rendering and required-variable
+#: checks. After resolution these are concrete :data:`YamlValue`s; before
+#: resolution a value may instead be an untagged literal or a ``from:`` source
+#: mapping (see :mod:`sources`).
 Variables = dict[str, YamlValue]
+
+
+@dataclass(frozen=True)
+class LiteralSource:
+    """A value used verbatim. The default when a variable has no ``from:`` tag,
+    and also the explicit escape hatch ``{from: literal, value: ...}`` for a
+    literal mapping that would otherwise look like a source. See PLAN.md
+    "Variable value sources"."""
+
+    value: YamlValue
+
+
+@dataclass(frozen=True)
+class SecretSource:
+    """``{from: secret, name: NAME}`` — resolved from the :class:`SecretStore`."""
+
+    name: str
+
+
+@dataclass(frozen=True)
+class CaptureSource:
+    """``{from: capture, command: [...], stdin: <source?>, trim: bool}``.
+
+    Runs a subprocess (argv list, never a shell) and uses its stdout. Each
+    element of ``command`` and the optional ``stdin`` are themselves sources
+    (literal or secret), so arguments/stdin can come from literals or secrets.
+    ``trim`` strips a single trailing newline (default ``True``).
+    """
+
+    command: tuple["VariableSource", ...]
+    stdin: "VariableSource | None" = None
+    trim: bool = True
+
+
+#: A parsed variable value source. See :mod:`sources`.
+VariableSource = Union[LiteralSource, SecretSource, CaptureSource]
+
+
+@dataclass(frozen=True)
+class SecretStore:
+    """Named secrets loaded from the untracked secrets file (``{secrets: {...}}``).
+
+    A flat name -> value store referenced by :class:`SecretSource`. Values must
+    never be logged or written to non-output diagnostics. Lookup lives in
+    :mod:`sources`. See PLAN.md "Secrets".
+    """
+
+    secrets: dict[str, YamlValue] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

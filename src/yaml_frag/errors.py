@@ -55,6 +55,27 @@ class FragmentError(YamlFragError):
     exit_code = ExitCode.FRAGMENT_VALIDATION
 
 
+class VariableResolutionError(YamlFragError):
+    """A variable value source could not be resolved.
+
+    Base for secret-lookup and capture-subprocess failures. Messages must name
+    the target and the variable, and must never include resolved secret values
+    or secret-derived command arguments (PLAN.md "Variable value sources").
+    """
+
+    exit_code = ExitCode.VARIABLE_RESOLUTION
+
+
+class SecretNotFoundError(VariableResolutionError):
+    """A ``from: secret`` reference names a secret absent from the store."""
+
+
+class CaptureError(VariableResolutionError):
+    """A ``from: capture`` subprocess failed (nonzero exit, timeout, or not
+    found). Include the command name and captured stderr, with any
+    secret-sourced arguments redacted."""
+
+
 class TemplateRenderError(YamlFragError):
     """Template substitution failed (e.g. a strictly-undefined variable)."""
 

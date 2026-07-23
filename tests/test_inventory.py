@@ -52,6 +52,7 @@ def test_duplicate_target_definition_fails() -> None:
     raise NotImplementedError
 
 
-def test_secret_overlay_precedence() -> None:
-    """Secrets override target vars but are overridden by CLI --var."""
+def test_resolved_variables_are_left_unresolved() -> None:
+    """resolve_target layers definitions but does not resolve `from:` sources;
+    that happens later in sources.resolve_variables (see test_sources.py)."""
     raise NotImplementedError

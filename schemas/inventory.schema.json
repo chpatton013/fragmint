@@ -29,7 +29,7 @@
   "$defs": {
     "variables": {
       "type": "object",
-      "description": "Free-form mapping of variable name to value."
+      "description": "Mapping of variable name to value. Each value is either a literal (scalar/list/mapping) or a `from:` source (secret/capture/literal). Source shapes are validated in sources.py, not here. See PLAN.md 'Variable value sources'."
     },
     "fragmentList": {
       "type": "array",

@@ -25,6 +25,7 @@ from .models import YamlValue
 INVENTORY_SCHEMA = "inventory.schema.json"
 FRAGMENT_SCHEMA = "fragment.schema.json"
 PROJECT_SCHEMA = "project.schema.json"
+SECRETS_SCHEMA = "secrets.schema.json"
 
 
 def check_unresolved_markers(document: YamlValue) -> None:
