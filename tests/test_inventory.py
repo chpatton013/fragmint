@@ -8,17 +8,17 @@ pytestmark = pytest.mark.skip(reason="TODO: implement — see PLAN.md 'Inventory
 
 
 def test_default_variables_applied() -> None:
-    """Inventory `defaults.variables` appear in a machine's resolved vars."""
+    """Inventory `defaults.variables` appear in a target's resolved vars."""
     raise NotImplementedError
 
 
 def test_group_variable_precedence() -> None:
-    """Group vars override defaults, in machine group order."""
+    """Group vars override defaults, in target group order."""
     raise NotImplementedError
 
 
-def test_machine_variable_precedence() -> None:
-    """Machine vars override group and default vars."""
+def test_target_variable_precedence() -> None:
+    """Target vars override group and default vars."""
     raise NotImplementedError
 
 
@@ -28,12 +28,12 @@ def test_cli_variable_precedence() -> None:
 
 
 def test_group_order_preserved() -> None:
-    """Groups are applied in the machine's declared order, not sorted."""
+    """Groups are applied in the target's declared order, not sorted."""
     raise NotImplementedError
 
 
 def test_fragment_order() -> None:
-    """Final fragment order is defaults -> groups (in order) -> machine."""
+    """Final fragment order is defaults -> groups (in order) -> target."""
     raise NotImplementedError
 
 
@@ -47,11 +47,11 @@ def test_missing_fragment_reference_fails() -> None:
     raise NotImplementedError
 
 
-def test_duplicate_machine_definition_fails() -> None:
-    """Duplicate machine names are rejected during inventory validation."""
+def test_duplicate_target_definition_fails() -> None:
+    """Duplicate target names are rejected during inventory validation."""
     raise NotImplementedError
 
 
 def test_secret_overlay_precedence() -> None:
-    """Secrets override machine vars but are overridden by CLI --var."""
+    """Secrets override target vars but are overridden by CLI --var."""
     raise NotImplementedError

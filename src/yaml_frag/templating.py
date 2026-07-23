@@ -18,9 +18,9 @@ Requirements to implement:
   result as YAML (PLAN.md "Template scope").
 
 Errors must be raised as
-:class:`~autoinstall_renderer.errors.TemplateRenderError` and include the
-machine name, fragment name, operation index, and missing/failed variable
-name (PLAN.md "Template rendering", "Error-message tests").
+:class:`~yaml_frag.errors.TemplateRenderError` and include the target name,
+fragment name, operation index, and missing/failed variable name (PLAN.md
+"Template rendering", "Error-message tests").
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ def render_value(
     value: YamlValue,
     variables: Variables,
     *,
-    machine: str,
+    target: str,
     fragment: str,
     operation_index: int,
 ) -> YamlValue:
@@ -40,7 +40,7 @@ def render_value(
 
     Walks mappings and lists; renders string leaves through the strict
     environment; leaves non-string scalars untouched. Returns a new structure
-    (does not mutate ``value``). The ``machine``/``fragment``/``operation_index``
+    (does not mutate ``value``). The ``target``/``fragment``/``operation_index``
     arguments exist purely to build actionable error messages.
     """
     raise NotImplementedError

@@ -26,7 +26,7 @@ def parse_pointer(pointer: str) -> tuple[str, ...]:
     ``"/"`` and ``""`` both denote the root and return ``()``.
     ``"/a/b~1c"`` returns ``("a", "b/c")``.
 
-    Raise :class:`~autoinstall_renderer.errors.AutoinstallError` (or a suitable
+    Raise :class:`~yaml_frag.errors.YamlFragError` (or a suitable
     subclass) if the pointer does not start with ``/`` and is not empty.
     """
     raise NotImplementedError
@@ -49,7 +49,7 @@ def set_(document: dict[str, YamlValue], pointer: str, value: YamlValue) -> None
 
     Mutates ``document`` in place. Used by the ``set`` operation
     (PLAN.md "set"). If an existing intermediate node is a non-mapping,
-    raise :class:`~autoinstall_renderer.errors.MergeConflictError`.
+    raise :class:`~yaml_frag.errors.MergeConflictError`.
     """
     raise NotImplementedError
 
@@ -59,7 +59,7 @@ def delete(document: dict[str, YamlValue], pointer: str, *, missing_ok: bool) ->
 
     Return ``True`` if something was removed. If the path is absent and
     ``missing_ok`` is ``False``, raise
-    :class:`~autoinstall_renderer.errors.AutoinstallError`; if ``True``, return
+    :class:`~yaml_frag.errors.YamlFragError`; if ``True``, return
     ``False``. Used by the ``remove`` operation (PLAN.md "remove").
     """
     raise NotImplementedError

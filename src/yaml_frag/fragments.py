@@ -33,7 +33,7 @@ def resolve_fragment_path(fragments_dir: Path, name: str) -> Path:
 
     ``resolve_fragment_path(Path("fragments"), "hardware/gb10")`` ->
     ``fragments/hardware/gb10.yaml``. Does not check existence here; the loader
-    raises :class:`~autoinstall_renderer.errors.UnknownFragmentError` if the
+    raises :class:`~yaml_frag.errors.UnknownFragmentError` if the
     file is missing.
     """
     raise NotImplementedError
@@ -42,9 +42,9 @@ def resolve_fragment_path(fragments_dir: Path, name: str) -> Path:
 def load_fragment(fragments_dir: Path, name: str) -> Fragment:
     """Load, validate, and return the fragment referenced by ``name``.
 
-    Raise :class:`~autoinstall_renderer.errors.UnknownFragmentError` if the
+    Raise :class:`~yaml_frag.errors.UnknownFragmentError` if the
     file does not exist, and
-    :class:`~autoinstall_renderer.errors.FragmentError` for any validation
+    :class:`~yaml_frag.errors.FragmentError` for any validation
     failure (including a name/path mismatch), with fragment name context.
     """
     raise NotImplementedError

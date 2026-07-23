@@ -19,9 +19,9 @@ Serialization requirements (PLAN.md "YAML serialization"):
 - prefer block style for multiline strings;
 - end the file with exactly one newline.
 
-The ``#cloud-config`` marker is NOT YAML data; it is prepended by the caller
-(:mod:`render`), not by this module. See PLAN.md
-"base/autoinstall-base.yaml" note.
+Any header such as ``#cloud-config`` is NOT YAML data; it comes from the
+project's output template, applied by :mod:`render`, not by this module. See
+PLAN.md "Project configuration" and "YAML serialization".
 
 ``ruamel.yaml`` is recommended for the formatting control above; PyYAML is
 acceptable if the determinism requirements are met.
@@ -37,9 +37,9 @@ from .models import YamlValue
 def load_file(path: Path) -> YamlValue:
     """Parse a single YAML document from ``path``.
 
-    Raise :class:`~autoinstall_renderer.errors.AutoinstallError` (or the most
-    specific applicable subclass at the call site) on parse failure, with the
-    file path included in the message.
+    Raise :class:`~yaml_frag.errors.YamlFragError` (or the most specific
+    applicable subclass at the call site) on parse failure, with the file path
+    included in the message.
     """
     raise NotImplementedError
 
@@ -47,7 +47,7 @@ def load_file(path: Path) -> YamlValue:
 def dump_str(document: YamlValue) -> str:
     """Serialize ``document`` to a deterministic YAML string.
 
-    Does NOT include the ``#cloud-config`` prefix. Must satisfy every
-    requirement in the module docstring. Ends with a single trailing newline.
+    Does NOT include any output-template header. Must satisfy every requirement
+    in the module docstring. Ends with a single trailing newline.
     """
     raise NotImplementedError

@@ -1,9 +1,10 @@
-# Primary inventory: defaults, groups, and machines.
+# Inventory: defaults, reusable groups, and targets.
 # See PLAN.md "Inventory format".
 #
-# NOTE for the implementer: the layout in PLAN.md also lists inventory/groups.yaml.
-# For the first version, groups live here in this single file; groups.yaml is a
-# reserved placeholder for a future split. --inventory points at ONE file.
+# This is the example autoinstall project. A "target" is any named thing you
+# render a document for; here they happen to be machines. Fragment paths are
+# arbitrary — the tool imposes no category structure. Precedence is positional:
+# the resolved fragment list (defaults -> groups -> target) is applied in order.
 version: 1
 
 defaults:
@@ -14,10 +15,9 @@ defaults:
     keyboard_layout: us
 
   fragments:
-    - base/autoinstall-base
-    - base/default-user
-    - releases/ubuntu-24.04
-    - sites/home
+    - autoinstall/base
+    - autoinstall/default-user
+    - ubuntu-24.04
 
 groups:
   gb10:
@@ -36,12 +36,6 @@ groups:
     fragments:
       - roles/general-server
 
-  # NOTE: PLAN.md's "complete expected render" for gb10-01 shows the
-  # general-server package set WITHOUT proxmox's gnupg, even though the
-  # inventory example lists proxmox_hosts. These two examples in PLAN.md are
-  # mutually inconsistent. This skeleton keeps proxmox on its own machine so
-  # the gb10-01 snapshot can match the documented expected output exactly.
-  # The implementer should reconcile per acceptance criterion 14.
   proxmox_hosts:
     fragments:
       - roles/proxmox-host
@@ -50,13 +44,18 @@ groups:
     fragments:
       - roles/docker-host
 
-machines:
+targets:
+  # Each target ends its fragment list with autoinstall/checks so the
+  # structural assertions run against the fully composed document. This is how
+  # document-specific validation is expressed now — via fragments, not built
+  # into the renderer.
   gb10-01:
     groups:
       - gb10
       - general_servers
     fragments:
       - hosts/gb10-01
+      - autoinstall/checks
     variables:
       identity_hostname: gb10-01
       identity_password_hash: "$6$example-salt$example-hash"
@@ -68,6 +67,7 @@ machines:
       - general_servers
     fragments:
       - hosts/gb10-02
+      - autoinstall/checks
     variables:
       identity_hostname: gb10-02
       identity_password_hash: "$6$example-salt$example-hash"
@@ -79,6 +79,7 @@ machines:
       - general_servers
     fragments:
       - hosts/generic-vm-01
+      - autoinstall/checks
     variables:
       identity_hostname: generic-vm-01
       identity_password_hash: "$6$example-salt$example-hash"

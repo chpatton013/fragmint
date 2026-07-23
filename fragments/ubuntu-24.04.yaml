@@ -1,6 +1,6 @@
 fragment:
   version: 1
-  name: releases/ubuntu-24.04
+  name: ubuntu-24.04
   description: Ubuntu 24.04 Server installation source.
 
 # Do not place the HWE kernel here; it may be hardware-specific. See PLAN.md.

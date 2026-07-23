@@ -1,0 +1,37 @@
+fragment:
+  version: 1
+  name: autoinstall/checks
+  description: >-
+    Structural assertions for a valid Ubuntu autoinstall document. These used to
+    be hard-coded in the renderer; they now live here as data so the tool stays
+    generic. Include this fragment LAST for a target (after everything else has
+    been composed). See PLAN.md "Document assertions".
+
+operations:
+  - op: assert
+    path: /autoinstall/version
+    equals: 1
+
+  - op: assert
+    path: /autoinstall/identity/hostname
+    type: string
+
+  - op: assert
+    path: /autoinstall/identity/username
+    type: string
+
+  - op: assert
+    path: /autoinstall/identity/password
+    type: string
+
+  - op: assert
+    path: /autoinstall/ssh/install-server
+    type: boolean
+
+  - op: assert
+    path: /autoinstall/ssh/allow-pw
+    type: boolean
+
+  - op: assert
+    path: /autoinstall/storage
+    exists: true

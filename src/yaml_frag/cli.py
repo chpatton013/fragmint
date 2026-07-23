@@ -1,12 +1,16 @@
-"""Command-line interface for ``autoinstall-render``.
+"""Command-line interface for ``yaml-frag``.
 
 See PLAN.md "Command-line interface". This module wires up the command
 structure, options, and the top-level error-to-exit-code mapping. Command
-bodies are stubs to be implemented against :mod:`render`, :mod:`inventory`,
-and :mod:`provenance`.
+bodies are stubs to be implemented against :mod:`config`, :mod:`render`,
+:mod:`inventory`, and :mod:`provenance`.
 
-Output discipline (PLAN.md): the rendered configuration goes to STDOUT only
-for ``--stdout``; ALL diagnostics (warnings, errors, progress) go to STDERR.
+Domain defaults (inventory/fragments locations, output path/template,
+validators) come from the project configuration (:mod:`config`); the CLI flags
+below override those defaults per invocation.
+
+Output discipline (PLAN.md): rendered output goes to STDOUT only for
+``--stdout``; ALL diagnostics (warnings, errors, progress) go to STDERR.
 """
 
 from __future__ import annotations
@@ -16,13 +20,9 @@ from pathlib import Path
 
 import click
 
-from .errors import AutoinstallError
+from .config import DEFAULT_CONFIG_PATH
+from .errors import YamlFragError
 from .exit_codes import ExitCode
-
-#: Default locations, overridable per-command.
-DEFAULT_INVENTORY = Path("inventory/machines.yaml")
-DEFAULT_FRAGMENTS_DIR = Path("fragments")
-DEFAULT_OUTPUT_DIR = Path("rendered")
 
 
 def _parse_var(ctx: click.Context, param: click.Parameter, values: tuple[str, ...]) -> dict[str, str]:
@@ -35,22 +35,28 @@ def _parse_var(ctx: click.Context, param: click.Parameter, values: tuple[str, ..
     raise NotImplementedError
 
 
-# Shared option decorators ---------------------------------------------------
-
+# Shared option decorators. Path defaults are None so the resolved value comes
+# from the project config unless the flag is given.
+_config_option = click.option(
+    "--config",
+    "config_path",
+    type=click.Path(path_type=Path),
+    default=DEFAULT_CONFIG_PATH,
+    show_default=True,
+    help="Project configuration file.",
+)
 _inventory_option = click.option(
     "--inventory",
     "inventory_path",
     type=click.Path(path_type=Path),
-    default=DEFAULT_INVENTORY,
-    show_default=True,
-    help="Path to the inventory YAML file.",
+    default=None,
+    help="Inventory YAML file (overrides project config).",
 )
 _fragments_option = click.option(
     "--fragments-dir",
     type=click.Path(path_type=Path),
-    default=DEFAULT_FRAGMENTS_DIR,
-    show_default=True,
-    help="Directory containing fragment files.",
+    default=None,
+    help="Directory containing fragment files (overrides project config).",
 )
 _secrets_option = click.option(
     "--secrets",
@@ -67,114 +73,134 @@ _var_option = click.option(
     metavar="KEY=VALUE",
     help="Override a variable. May be repeated.",
 )
+_validator_option = click.option(
+    "--validator",
+    "validators",
+    multiple=True,
+    metavar="NAME",
+    help="Run a named validator from the project config. May be repeated. "
+    "If omitted, the output's default validators run.",
+)
 
 
 @click.group()
 @click.version_option()
 def cli() -> None:
-    """Render Ubuntu autoinstall configurations from inventory + fragments."""
+    """Compose structured YAML documents from an inventory and ordered fragments."""
 
 
 @cli.command()
-@click.argument("machine")
+@click.argument("target")
+@_config_option
 @_inventory_option
 @_fragments_option
 @_secrets_option
 @_var_option
-@click.option("--output", "output_dir", type=click.Path(path_type=Path), default=DEFAULT_OUTPUT_DIR, show_default=True)
-@click.option("--stdout", "to_stdout", is_flag=True, help="Print rendered config to stdout instead of writing files.")
+@_validator_option
+@click.option("--output", "output_path", type=click.Path(path_type=Path), default=None, help="Override the destination path for this render.")
+@click.option("--stdout", "to_stdout", is_flag=True, help="Print rendered output to stdout instead of writing.")
 @click.option("--dry-run", is_flag=True, help="Render and validate but write nothing.")
 @click.option("--quiet-overrides", is_flag=True, help="Suppress override warnings.")
-@click.option("--no-validate", "validate", is_flag=True, default=True, flag_value=False, help="Skip rendered-document validation.")
+@click.option("--no-validate", "validate", is_flag=True, default=True, flag_value=False, help="Skip generic validation and validators.")
 def render(
-    machine: str,
-    inventory_path: Path,
-    fragments_dir: Path,
+    target: str,
+    config_path: Path,
+    inventory_path: Path | None,
+    fragments_dir: Path | None,
     secrets_path: Path | None,
     cli_variables: dict[str, str],
-    output_dir: Path,
+    validators: tuple[str, ...],
+    output_path: Path | None,
     to_stdout: bool,
     dry_run: bool,
     quiet_overrides: bool,
     validate: bool,
 ) -> None:
-    """Render one MACHINE to ``rendered/<machine>/user-data`` (+ meta-data)."""
+    """Render one TARGET to its configured output path."""
     raise NotImplementedError
 
 
 @cli.command("render-all")
+@_config_option
 @_inventory_option
 @_fragments_option
 @_secrets_option
-@click.option("--output", "output_dir", type=click.Path(path_type=Path), default=DEFAULT_OUTPUT_DIR, show_default=True)
+@_validator_option
 @click.option("--quiet-overrides", is_flag=True)
 @click.option("--no-validate", "validate", is_flag=True, default=True, flag_value=False)
 def render_all(
-    inventory_path: Path,
-    fragments_dir: Path,
+    config_path: Path,
+    inventory_path: Path | None,
+    fragments_dir: Path | None,
     secrets_path: Path | None,
-    output_dir: Path,
+    validators: tuple[str, ...],
     quiet_overrides: bool,
     validate: bool,
 ) -> None:
-    """Render every machine in inventory order; nonzero if any fails.
+    """Render every target in inventory order; nonzero if any fails.
 
-    Do not leave a partial final output file for a failed machine (atomic
-    writes; PLAN.md "Render all machines").
+    Do not leave a partial final output file for a failed target (atomic
+    writes; PLAN.md "Render all targets").
     """
     raise NotImplementedError
 
 
 @cli.command()
-@click.argument("machine")
+@click.argument("target")
+@_config_option
 @_inventory_option
 @_fragments_option
 @_secrets_option
 @_var_option
-@click.option("--subiquity", is_flag=True, help="Also run optional external Subiquity validation.")
+@_validator_option
 def validate(
-    machine: str,
-    inventory_path: Path,
-    fragments_dir: Path,
+    target: str,
+    config_path: Path,
+    inventory_path: Path | None,
+    fragments_dir: Path | None,
     secrets_path: Path | None,
     cli_variables: dict[str, str],
-    subiquity: bool,
+    validators: tuple[str, ...],
 ) -> None:
-    """Render MACHINE in memory and validate without writing output."""
+    """Render TARGET in memory and validate without writing output."""
     raise NotImplementedError
 
 
 @cli.command("validate-all")
+@_config_option
 @_inventory_option
 @_fragments_option
 @_secrets_option
-@click.option("--subiquity", is_flag=True)
+@_validator_option
 def validate_all(
-    inventory_path: Path,
-    fragments_dir: Path,
+    config_path: Path,
+    inventory_path: Path | None,
+    fragments_dir: Path | None,
     secrets_path: Path | None,
-    subiquity: bool,
+    validators: tuple[str, ...],
 ) -> None:
-    """Validate every machine in inventory order; nonzero if any fails."""
+    """Validate every target in inventory order; nonzero if any fails."""
     raise NotImplementedError
 
 
 @cli.command()
-@click.argument("machine")
+@click.argument("target")
 @click.argument("path", required=False)
+@_config_option
 @_inventory_option
 @_fragments_option
 @_secrets_option
 @_var_option
 def explain(
-    machine: str,
+    target: str,
     path: str | None,
-    inventory_path: Path,
-    fragments_dir: Path,
+    config_path: Path,
+    inventory_path: Path | None,
+    fragments_dir: Path | None,
     secrets_path: Path | None,
     cli_variables: dict[str, str],
 ) -> None:
-    """Show provenance for MACHINE, optionally scoped to a single PATH.
+    """Show provenance for TARGET, optionally scoped to a single PATH.
 
     See PLAN.md "Provenance tracking" for the expected output format.
     """
@@ -182,25 +208,28 @@ def explain(
 
 
 @cli.command("list")
-@click.argument("kind", type=click.Choice(["machines", "fragments", "groups"]))
+@click.argument("kind", type=click.Choice(["targets", "fragments", "groups"]))
+@_config_option
 @_inventory_option
 @_fragments_option
-def list_(kind: str, inventory_path: Path, fragments_dir: Path) -> None:
-    """List ``machines``, ``fragments``, or ``groups``."""
+def list_(kind: str, config_path: Path, inventory_path: Path | None, fragments_dir: Path | None) -> None:
+    """List ``targets``, ``fragments``, or ``groups``."""
     raise NotImplementedError
 
 
 @cli.command()
-@click.argument("machine")
+@click.argument("target")
+@_config_option
 @_inventory_option
 @_fragments_option
 @_secrets_option
 @_var_option
 @click.option("--show-secrets", is_flag=True, help="Do not redact secret-looking values (unsafe).")
 def inspect(
-    machine: str,
-    inventory_path: Path,
-    fragments_dir: Path,
+    target: str,
+    config_path: Path,
+    inventory_path: Path | None,
+    fragments_dir: Path | None,
     secrets_path: Path | None,
     cli_variables: dict[str, str],
     show_secrets: bool,
@@ -215,14 +244,14 @@ def inspect(
 def main(argv: list[str] | None = None) -> int:
     """Entry point. Run the CLI and translate errors into stable exit codes.
 
-    Catches :class:`~autoinstall_renderer.errors.AutoinstallError`, prints its
-    message to STDERR, and returns ``exc.exit_code``. Click usage errors map to
+    Catches :class:`~yaml_frag.errors.YamlFragError`, prints its message to
+    STDERR, and returns ``exc.exit_code``. Click usage errors map to
     :data:`ExitCode.USAGE`. Returns the process exit code (never raises for
     known failures). See PLAN.md "Exit codes".
     """
     try:
         cli.main(args=argv, standalone_mode=False)
-    except AutoinstallError as exc:
+    except YamlFragError as exc:
         click.echo(str(exc), err=True)
         return int(exc.exit_code)
     except click.UsageError as exc:

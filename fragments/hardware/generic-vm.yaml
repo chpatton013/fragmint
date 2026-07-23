@@ -31,6 +31,10 @@ operations:
           dhcp4: true
           dhcp6: false
 
+  - op: assert
+    path: /autoinstall/network/version
+    equals: 2
+
   - op: append
     path: /autoinstall/user-data/packages
     deduplicate: true

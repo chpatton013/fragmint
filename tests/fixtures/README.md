@@ -7,21 +7,22 @@ Committed inputs and expected outputs for the test suite.
 Expected rendered files live under:
 
 ```
-tests/fixtures/expected/<machine>/user-data
+tests/fixtures/expected/<target>/user-data
 ```
 
-for the machines in `tests/test_render.py::SNAPSHOT_MACHINES`
+for the targets in `tests/test_render.py::SNAPSHOT_TARGETS`
 (`generic-vm-01`, `gb10-01`, `gb10-02`). See PLAN.md "Snapshot tests".
 
 To (re)generate after the renderer works:
 
 ```bash
-autoinstall-render render <machine> --output tests/fixtures/expected
+yaml-frag render <target> --output tests/fixtures/expected/<target>/user-data
 ```
 
 Review the diff before committing — the snapshot is the reviewed contract.
 
 ## Malformed inputs
 
-Put intentionally-broken inventories/fragments used by negative tests under
-`tests/fixtures/invalid/` (e.g. name mismatch, unknown group, bad op).
+Put intentionally-broken configs/inventories/fragments used by negative tests
+under `tests/fixtures/invalid/` (e.g. fragment name mismatch, unknown group,
+bad op, wrong-version project config).

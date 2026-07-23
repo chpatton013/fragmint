@@ -135,7 +135,7 @@ def apply_assert(
 
     Supported forms (PLAN.md "assert"): ``equals``, ``exists: true|false``,
     and ``type: mapping|list|string|integer|boolean``. Raise
-    :class:`~autoinstall_renderer.errors.AssertionFailedError` on failure with
+    :class:`~yaml_frag.errors.AssertionFailedError` on failure with
     the path and expectation in the message.
     """
     raise NotImplementedError

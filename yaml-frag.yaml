@@ -1,0 +1,29 @@
+# Project configuration for the example Ubuntu autoinstall project.
+# See PLAN.md "Project configuration".
+#
+# Everything domain-specific lives here (and in fragments), never in the
+# renderer: the #cloud-config header comes from the output template, and the
+# optional Subiquity check is a named validator.
+version: 1
+
+inventory: inventory/targets.yaml
+fragments_dir: fragments
+
+output:
+  # {target} is substituted with the target name.
+  path: "rendered/{target}/user-data"
+  # The serialized YAML replaces the literal token "{{ document }}" in this
+  # file. This is what prepends "#cloud-config".
+  template: templates/user-data.tmpl
+  # Optional JSON schema for the rendered document (unused by this project;
+  # structural checks are done via the autoinstall/checks fragment instead).
+  schema: null
+  # Named validators to run by default for this output (none by default).
+  validators: []
+
+# Named external validators, selected with --validator NAME.
+validators:
+  subiquity:
+    command:
+      - python3
+      - tools/validate-autoinstall-user-data.py

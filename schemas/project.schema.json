@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/yaml-frag/project.schema.json",
+  "title": "yaml-frag project configuration",
+  "description": "Structural schema for yaml-frag.yaml. See PLAN.md 'Project configuration'. Cross-cutting rules (e.g. that {target} appears in output.path when rendering many targets, and that --validator names exist) are enforced in config.py.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "output"],
+  "properties": {
+    "version": { "const": 1 },
+    "inventory": { "type": "string", "minLength": 1 },
+    "fragments_dir": { "type": "string", "minLength": 1 },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "template": { "type": ["string", "null"] },
+        "schema": { "type": ["string", "null"] },
+        "validators": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "validators": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/validator" }
+    }
+  },
+  "$defs": {
+    "validator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        }
+      }
+    }
+  }
+}

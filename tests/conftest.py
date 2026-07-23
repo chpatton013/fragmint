@@ -1,7 +1,7 @@
 """Shared pytest fixtures.
 
-Fixtures point at the repo's real ``inventory/`` and ``fragments/`` so tests
-can render the representative machines. Snapshot expectations live under
+Fixtures point at the repo's real project config, inventory, and fragments so
+tests can render the representative targets. Snapshot expectations live under
 ``tests/fixtures/`` (see PLAN.md "Snapshot tests").
 """
 
@@ -20,8 +20,13 @@ def repo_root() -> Path:
 
 
 @pytest.fixture
+def config_path() -> Path:
+    return REPO_ROOT / "yaml-frag.yaml"
+
+
+@pytest.fixture
 def inventory_path() -> Path:
-    return REPO_ROOT / "inventory" / "machines.yaml"
+    return REPO_ROOT / "inventory" / "targets.yaml"
 
 
 @pytest.fixture

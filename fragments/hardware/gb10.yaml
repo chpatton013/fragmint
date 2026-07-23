@@ -30,3 +30,9 @@ operations:
             name: "{{ primary_interface }}"
           dhcp4: true
           dhcp6: false
+
+  # Structural checks are attached where the structure is produced, replacing
+  # what used to be built into the renderer. See PLAN.md "Document assertions".
+  - op: assert
+    path: /autoinstall/network/version
+    equals: 2

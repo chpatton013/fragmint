@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "autoinstall-renderer"
+name = "yaml-frag"
 version = "0.1.0"
-description = "Render Ubuntu Server autoinstall configurations from an inventory and ordered, explicit configuration fragments."
+description = "Generic YAML fragment composer: render structured YAML documents from an inventory, ordered reusable fragments, per-target variables, and explicit path-based merge operations."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
@@ -27,13 +27,13 @@ dev = [
 ]
 
 [project.scripts]
-autoinstall-render = "autoinstall_renderer.cli:main"
+yaml-frag = "yaml_frag.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-autoinstall_renderer = ["py.typed"]
+yaml_frag = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

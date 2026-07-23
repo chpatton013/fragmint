@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.com/autoinstall/inventory.schema.json",
-  "title": "Autoinstall inventory",
-  "description": "Structural schema for the inventory file. Cross-cutting rules (unique names, referenced groups exist, order preservation) are enforced in inventory.py, not here. See PLAN.md 'Inventory validation'.",
+  "$id": "https://example.com/yaml-frag/inventory.schema.json",
+  "title": "yaml-frag inventory",
+  "description": "Structural schema for the inventory file. Cross-cutting rules (unique names, referenced groups exist, order preservation) are enforced in inventory.py, not here. See PLAN.md 'Validation'.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "machines"],
+  "required": ["version", "targets"],
   "properties": {
     "version": { "const": 1 },
     "defaults": {
@@ -20,21 +20,10 @@
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/group" }
     },
-    "machines": {
+    "targets": {
       "type": "object",
       "minProperties": 1,
-      "additionalProperties": { "$ref": "#/$defs/machine" }
-    },
-    "validation": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "command": {
-          "type": "array",
-          "items": { "type": "string" },
-          "minItems": 1
-        }
-      }
+      "additionalProperties": { "$ref": "#/$defs/target" }
     }
   },
   "$defs": {
@@ -54,7 +43,7 @@
         "fragments": { "$ref": "#/$defs/fragmentList" }
       }
     },
-    "machine": {
+    "target": {
       "type": "object",
       "additionalProperties": false,
       "properties": {

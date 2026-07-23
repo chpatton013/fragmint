@@ -11,7 +11,7 @@ from enum import IntEnum
 
 
 class ExitCode(IntEnum):
-    """Process exit codes returned by the ``autoinstall-render`` executable."""
+    """Process exit codes returned by the ``yaml-frag`` executable."""
 
     SUCCESS = 0
     #: General rendering failure not covered by a more specific code.
@@ -24,5 +24,8 @@ class ExitCode(IntEnum):
     FRAGMENT_VALIDATION = 4
     #: A merge operation produced an incompatible-type conflict.
     MERGE_CONFLICT = 5
-    #: The rendered document failed structural validation.
+    #: The rendered document failed validation (generic check, schema,
+    #: assertion, or external validator).
     RENDERED_VALIDATION = 6
+    #: The project-configuration file is missing or invalid.
+    CONFIG_ERROR = 7

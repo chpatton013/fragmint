@@ -13,3 +13,7 @@ operations:
       - curl
       - iputils-ping
       - vim-tiny
+
+  - op: assert
+    path: /autoinstall/user-data/packages
+    type: list

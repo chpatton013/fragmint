@@ -1,30 +1,37 @@
-# Autoinstall Configuration Renderer
+# yaml-frag — YAML Fragment Composer
 
 ## Objective
 
-Build a Python command-line tool that renders complete Ubuntu Server autoinstall configurations from:
+Build a generic Python command-line tool that renders structured YAML documents
+from:
 
-1. an inventory of machines;
+1. an inventory of targets;
 2. an ordered sequence of reusable configuration fragments;
-3. per-machine variables;
-4. explicit fragment merge instructions.
+3. per-target variables;
+4. explicit path-based merge operations.
 
-The system should support repeatable, unattended installation of Ubuntu Server on heterogeneous homelab machines.
+The tool composes arbitrary YAML documents deterministically. It contains **no
+built-in knowledge of any particular document schema**. The first supported use
+case is **Ubuntu Server autoinstall**, which is implemented entirely through
+*project configuration, schemas, validators, and example fragments* — never
+through hard-coded renderer behavior.
 
 The design must make it easy to:
 
 * define reusable base configurations;
-* define hardware-model-specific configuration;
-* define role-specific configuration;
-* define environment-specific configuration;
+* define reusable, composable fragments under any layout the user chooses;
+* provide per-target variables;
 * override configuration values deliberately;
 * append items to selected lists;
-* render one machine or all machines;
+* render one target or all targets;
 * inspect which fragment supplied each value;
-* validate rendered YAML before deployment;
+* validate rendered YAML before use, using project-supplied rules;
+* wrap rendered YAML in an arbitrary output template (e.g. a `#cloud-config`
+  header);
 * avoid implicit or surprising merge behavior.
 
-The initial target is Ubuntu 24.04 Server autoinstall with Subiquity and cloud-init, but the renderer should remain generic enough to merge arbitrary YAML documents.
+The renderer merges arbitrary YAML documents; any document-specific structure,
+required fields, and validation come from the project, not the tool.
 
 ---
 
@@ -32,30 +39,20 @@ The initial target is Ubuntu 24.04 Server autoinstall with Subiquity and cloud-i
 
 ## Ordered composition
 
-Each machine specifies an ordered list of fragments.
+Each target specifies (directly or via reusable groups) an ordered list of
+fragments.
 
-Fragments are applied from first to last.
+Fragments are applied from first to last. Later fragments may override or extend
+values produced by earlier fragments. **Order is the only thing that determines
+precedence.** The renderer never reorders fragments — not alphabetically, not by
+path, not by any category convention.
 
-Later fragments may override or extend values produced by earlier fragments.
-
-Example:
-
-```text
-base
-ubuntu-24.04
-hardware-gb10
-role-proxmox
-site-home
-host-gb10-01
-```
-
-The result should be deterministic.
+The result must be deterministic.
 
 ## Explicit merge behavior
 
-Fragments must include enough metadata to tell the renderer how each field should be applied.
-
-Do not rely on a recursive deep-merge algorithm alone.
+Fragments must include enough metadata to tell the renderer how each field
+should be applied. Do not rely on a recursive deep-merge algorithm alone.
 
 A fragment must be able to specify operations such as:
 
@@ -65,80 +62,90 @@ A fragment must be able to specify operations such as:
 * prepend values to a list;
 * replace a list;
 * remove a field;
-* remove selected list entries.
+* remove selected list entries;
+* assert a condition.
 
-The default behavior should be conservative and predictable.
+The default behavior must be conservative and predictable.
 
 ## Separation of data and rendering logic
 
-The renderer must not contain hard-coded knowledge about specific hosts, hardware models, usernames, SSH identities, package lists, or network interfaces.
+The renderer must not contain hard-coded knowledge about any specific document
+type — no autoinstall keys, no host names, hardware models, usernames, SSH
+identities, package lists, network interfaces, or required-field rules.
 
-Those belong in inventory and fragments.
+Everything domain-specific belongs in the inventory, fragments, project
+configuration, and schemas.
 
-The renderer may contain generic knowledge about:
+The renderer may contain only generic knowledge about:
 
-* YAML parsing;
-* merge operations;
-* template rendering;
-* validation;
+* YAML parsing and deterministic serialization;
+* path-based merge operations;
+* template variable substitution;
 * provenance tracking;
+* generic structural validation (unresolved-marker detection, optional
+  user-supplied schema, user-defined assertions, user-defined validators);
+* output templating and file writing;
 * command-line behavior.
 
 ## Fail closed
 
-Invalid or ambiguous configuration should stop rendering with a clear error.
-
+Invalid or ambiguous configuration must stop rendering with a clear error.
 Examples:
 
-* referenced fragment does not exist;
-* template variable is missing;
+* a referenced fragment does not exist;
+* a template variable is missing;
 * two fragments produce incompatible types;
 * a list is implicitly replaced without an explicit operation;
-* a removal targets a missing path when strict mode is enabled;
-* rendered YAML does not contain `autoinstall.version: 1`;
-* rendered configuration contains unresolved template expressions.
+* a removal targets a missing path when strict;
+* an assertion declared by a fragment fails;
+* the rendered configuration contains unresolved template expressions;
+* a configured validator reports failure.
+
+Note: assertions such as "the document must contain `autoinstall.version: 1`"
+are **not** built in. They are declared by the project's fragments (see
+"Assertions" and the example project).
 
 ## Human-readable source files
 
-Inventory and fragment files should be easy to review in Git.
-
+Inventory, fragment, and project-config files must be easy to review in Git.
 Avoid embedding large amounts of Python or arbitrary executable logic in YAML.
-
 Use Jinja-style variable substitution for values, but keep control flow minimal.
 
 ---
 
 # Suggested repository layout
 
+The tool imposes no fragment directory structure. The layout below is a
+*suggestion*; the `fragments/` subtree in particular is entirely up to the
+project — fragments may live under any nested path and are referenced by their
+path relative to the fragments directory.
+
 ```text
-autoinstall-config/
+yaml-frag/
 ├── README.md
 ├── pyproject.toml
+├── yaml-frag.yaml              # project configuration
 ├── inventory/
-│   ├── machines.yaml
-│   └── groups.yaml
-├── fragments/
-│   ├── base/
-│   │   ├── autoinstall-base.yaml
-│   │   └── default-user.yaml
-│   ├── releases/
-│   │   └── ubuntu-24.04.yaml
+│   └── targets.yaml
+├── fragments/                  # any nested layout the project likes
+│   ├── autoinstall/
+│   │   ├── base.yaml
+│   │   ├── default-user.yaml
+│   │   └── checks.yaml
+│   ├── ubuntu-24.04.yaml
 │   ├── hardware/
 │   │   ├── gb10.yaml
 │   │   └── generic-vm.yaml
 │   ├── roles/
-│   │   ├── proxmox-host.yaml
-│   │   ├── docker-host.yaml
 │   │   └── general-server.yaml
-│   ├── sites/
-│   │   └── home.yaml
 │   └── hosts/
 │       └── gb10-01.yaml
 ├── schemas/
 │   ├── inventory.schema.json
-│   └── fragment.schema.json
+│   ├── fragment.schema.json
+│   └── project.schema.json
 ├── templates/
-│   └── optional-static-files/
+│   └── user-data.tmpl          # output template (adds "#cloud-config")
 ├── rendered/
 │   └── .gitkeep
 ├── tests/
@@ -146,29 +153,76 @@ autoinstall-config/
 │   ├── test_merge.py
 │   ├── test_render.py
 │   ├── test_inventory.py
+│   ├── test_config.py
 │   └── test_cli.py
 └── src/
-    └── autoinstall_renderer/
+    └── yaml_frag/
         ├── __init__.py
         ├── cli.py
+        ├── config.py           # project configuration
         ├── inventory.py
         ├── fragments.py
         ├── merge.py
         ├── render.py
         ├── provenance.py
         ├── validation.py
+        ├── yamlio.py
+        ├── pointer.py
+        ├── templating.py
         └── errors.py
 ```
 
-The exact module names may vary, but responsibilities should remain separated.
+Module names may vary, but responsibilities must remain separated.
+
+---
+
+# Project configuration
+
+The project-configuration file (`yaml-frag.yaml` by default, overridable with
+`--config`) is how a project adapts the generic renderer to a specific use case.
+It declares default locations, how output is written, and named validators.
+
+```yaml
+version: 1
+
+# Default input locations (CLI flags override these).
+inventory: inventory/targets.yaml
+fragments_dir: fragments
+
+# How each target's rendered document is written.
+output:
+  # Destination path pattern. "{target}" is substituted with the target name.
+  path: "rendered/{target}/user-data"
+  # Optional text template. The serialized YAML replaces the literal token
+  # "{{ document }}" in this file. If omitted, the serialized YAML is written
+  # verbatim. This is how the autoinstall project adds the "#cloud-config"
+  # header — see templates/user-data.tmpl.
+  template: templates/user-data.tmpl
+  # Optional JSON schema the rendered document is validated against.
+  schema: null
+  # Named validators (see below) run by default for this output.
+  validators: []
+
+# Named validators, selected with --validator NAME. Each runs an external
+# command against the rendered output file; a nonzero exit is a failure.
+validators:
+  subiquity:
+    command: [python3, tools/validate-autoinstall-user-data.py]
+```
+
+Rules:
+
+* `output.path` must contain `{target}` when rendering more than one target.
+* `output.template`, `output.schema`, and `output.validators` are optional.
+* Everything domain-specific (the `#cloud-config` header, the Subiquity
+  validator, any document schema) lives here or in fragments — never in the
+  renderer.
 
 ---
 
 # Inventory format
 
-The main inventory file should define defaults, reusable groups, and machines.
-
-Example:
+The inventory defines defaults, reusable groups, and targets.
 
 ```yaml
 version: 1
@@ -179,102 +233,95 @@ defaults:
     ssh_import_id: gh:chpatton013
     locale: en_US.UTF-8
     keyboard_layout: us
-
   fragments:
-    - base/autoinstall-base
-    - base/default-user
-    - releases/ubuntu-24.04
-    - sites/home
+    - autoinstall/base
+    - autoinstall/default-user
+    - ubuntu-24.04
 
 groups:
   gb10:
     variables:
       hardware_model: gb10
-
     fragments:
       - hardware/gb10
-
-  proxmox_hosts:
+  general_servers:
     fragments:
-      - roles/proxmox-host
+      - roles/general-server
 
-machines:
+targets:
   gb10-01:
     groups:
       - gb10
-      - proxmox_hosts
-
+      - general_servers
     fragments:
       - hosts/gb10-01
-
+      - autoinstall/checks
     variables:
       identity_hostname: gb10-01
       identity_password_hash: "$6$example-salt$example-hash"
       primary_interface: enP7s7
 ```
 
+A **target** is any named thing you want to render a document for (a machine, an
+environment, a service — the renderer does not care).
+
+Groups are an optional generic reuse mechanism: a named bundle of variables and
+fragments a target can pull in.
+
 ## Fragment ordering
 
-The renderer must produce the final fragment order as:
+The final ordered fragment list for a target is the concatenation of:
 
-1. inventory defaults;
-2. groups in the order listed on the machine;
-3. machine fragments.
+1. inventory `defaults.fragments`;
+2. for each group the target lists, that group's fragments, in the target's
+   group order;
+3. the target's own `fragments`.
 
-For the preceding example:
+Precedence is purely positional: entries later in this resolved list override
+earlier ones. The renderer never reorders. For the example above:
 
 ```text
-base/autoinstall-base
-base/default-user
-releases/ubuntu-24.04
-sites/home
+autoinstall/base
+autoinstall/default-user
+ubuntu-24.04
 hardware/gb10
-roles/proxmox-host
+roles/general-server
 hosts/gb10-01
+autoinstall/checks
 ```
-
-Group order must be significant.
-
-The renderer must not alphabetically reorder groups or fragments.
 
 ## Variable precedence
 
-Variables should be merged in the following order:
+Variables are layered in this order (later wins):
 
-1. inventory defaults;
-2. group variables in machine group order;
-3. machine variables;
-4. CLI overrides.
+1. inventory `defaults.variables`;
+2. group variables, in the target's group order;
+3. target variables;
+4. secret overlay (see below);
+5. CLI overrides (`--var KEY=VALUE`).
 
-Later values override earlier values.
-
-CLI overrides should use syntax such as:
+CLI overrides:
 
 ```bash
-autoinstall-render render gb10-01 \
-  --var identity_hostname=test-gb10
+yaml-frag render gb10-01 --var identity_hostname=test-gb10
 ```
 
 ## Optional external secret variables
 
-The renderer should support loading an optional untracked secrets file:
+Support an optional untracked secrets file, merged after target variables but
+before CLI overrides:
 
 ```bash
-autoinstall-render render gb10-01 \
-  --secrets inventory/secrets.yaml
+yaml-frag render gb10-01 --secrets inventory/secrets.yaml
 ```
 
-Example:
-
 ```yaml
-machines:
+targets:
   gb10-01:
     identity_password_hash: "$6$..."
 ```
 
-Secret values should be merged after normal machine variables but before CLI overrides.
-
-The renderer must not log secret values in normal output.
+The renderer must never log secret values.
 
 ---
 
@@ -283,17 +330,15 @@ The renderer must not log secret values in normal output.
 Each fragment is a YAML document containing:
 
 * a fragment format version;
+* a name that matches its path;
 * a human-readable description;
-* a set of merge operations;
-* optional required variables;
-* optional assertions.
-
-Example:
+* an ordered set of operations;
+* optional required variables.
 
 ```yaml
 fragment:
   version: 1
-  name: base/default-user
+  name: autoinstall/default-user
   description: Configure the default administrative user and SSH access.
 
 requires:
@@ -311,28 +356,11 @@ operations:
         hostname: "{{ identity_hostname }}"
         username: "{{ identity_username }}"
         password: "{{ identity_password_hash }}"
-
       ssh:
         install-server: true
         allow-pw: false
         import-id:
           - "{{ ssh_import_id }}"
-
-  - op: append
-    path: /autoinstall/user-data/write_files
-    value:
-      - path: "/etc/sudoers.d/90-{{ identity_username }}-nopasswd"
-        owner: root:root
-        permissions: "0440"
-        content: |
-          {{ identity_username }} ALL=(ALL:ALL) NOPASSWD:ALL
-
-  - op: append
-    path: /autoinstall/user-data/runcmd
-    value:
-      - >-
-        visudo --check
-        --file="/etc/sudoers.d/90-{{ identity_username }}-nopasswd"
 ```
 
 ## Paths
@@ -340,46 +368,38 @@ operations:
 Use JSON Pointer-style paths:
 
 ```text
-/autoinstall
-/autoinstall/storage/layout
-/autoinstall/user-data/packages
+/                       the root document
+/a/b/c                  nested mapping keys
 ```
 
 Rules:
 
 * `/` represents the root document.
 * `/a/b/c` addresses nested mapping keys.
-* Array indexes should not be supported initially.
-* Escaping should follow JSON Pointer rules:
+* Array indexes are not supported initially.
+* Escaping follows JSON Pointer rules: `~1` → `/`, `~0` → `~`.
 
-  * `~1` represents `/`;
-  * `~0` represents `~`.
-
-Supporting array indexes is unnecessary for the first version and would encourage brittle fragments.
+Array-index mutation is intentionally omitted; it encourages brittle fragments.
 
 ## Fragment names
 
-Fragment references should omit the `.yaml` suffix:
+Fragment references omit the `.yaml` suffix and may use any nested path:
 
 ```yaml
 fragments:
   - hardware/gb10
+  - vendors/dell/poweredge-r640
 ```
 
-The renderer should resolve this to:
-
-```text
-fragments/hardware/gb10.yaml
-```
-
-Fragment files must declare a matching name:
+The renderer resolves `hardware/gb10` to `<fragments_dir>/hardware/gb10.yaml`.
+The fragment file must declare a matching name:
 
 ```yaml
 fragment:
   name: hardware/gb10
 ```
 
-A mismatch must be treated as an error.
+A mismatch is an error.
 
 ---
 
@@ -387,11 +407,7 @@ A mismatch must be treated as an error.
 
 ## `set`
 
-Replace the value at a path.
-
-Create missing parent mappings when possible.
-
-Example:
+Replace the value at a path, creating missing parent mappings.
 
 ```yaml
 - op: set
@@ -400,15 +416,12 @@ Example:
     package: linux-generic-hwe-24.04
 ```
 
-If a value already exists, it is replaced completely.
-
-Use this for explicit scalar, list, or object replacement.
+If a value already exists, it is replaced completely. Use this for explicit
+scalar, list, or object replacement.
 
 ## `merge`
 
 Recursively merge one mapping into another mapping.
-
-Example:
 
 ```yaml
 - op: merge
@@ -425,17 +438,15 @@ Rules:
 * nested mappings are recursively merged;
 * scalar values are replaced;
 * lists are not implicitly merged;
-* if a list already exists and the incoming mapping contains a list at the same path, rendering must fail unless the list value is identical.
+* if a list already exists and the incoming mapping contains a list at the same
+  path, rendering fails unless the list value is identical.
 
-This rule prevents accidental package-list replacement.
-
-Fragments that need to modify lists must use `append`, `prepend`, `set`, or removal operations explicitly.
+Fragments that need to modify lists must use `append`, `prepend`, `set`, or a
+removal operation explicitly.
 
 ## `append`
 
 Append one or more values to a list.
-
-Example:
 
 ```yaml
 - op: append
@@ -452,57 +463,34 @@ Rules:
 * preserve order;
 * do not deduplicate by default.
 
-Optional fragment field:
-
-```yaml
-deduplicate: true
-```
-
-When enabled, duplicate values should be removed while preserving the first occurrence.
-
-For mappings inside lists, equality should be structural.
+Optional field `deduplicate: true` removes duplicates while preserving the first
+occurrence. For mappings inside lists, equality is structural.
 
 ## `prepend`
 
-Prepend one or more values to a list.
-
-Example:
+Prepend one or more values to a list, preserving the order of incoming values.
 
 ```yaml
 - op: prepend
   path: /autoinstall/user-data/runcmd
   value:
-    - echo "Starting host bootstrap"
+    - echo "Starting bootstrap"
 ```
-
-Preserve the order of the incoming values.
 
 ## `remove`
 
-Remove a complete field.
-
-Example:
+Remove a complete field. Removing a missing field is an error unless
+`missing_ok: true`.
 
 ```yaml
 - op: remove
   path: /autoinstall/oem
+  missing_ok: true
 ```
-
-By default, removing a missing field should be an error.
-
-Allow:
-
-```yaml
-missing_ok: true
-```
-
-for intentionally optional removals.
 
 ## `remove-list-items`
 
 Remove selected values from a list.
-
-Example:
 
 ```yaml
 - op: remove-list-items
@@ -519,23 +507,20 @@ Rules:
 
 ## `assert`
 
-Verify a condition without modifying the document.
-
-Examples:
+Verify a condition without modifying the document. This is the primary mechanism
+for document-specific validation (see "Validation").
 
 ```yaml
 - op: assert
   path: /autoinstall/version
   equals: 1
-```
 
-```yaml
 - op: assert
   path: /autoinstall/storage/layout/name
   equals: lvm
 ```
 
-Support these assertion forms initially:
+Supported assertion forms initially:
 
 ```yaml
 equals: value
@@ -548,25 +533,23 @@ type: integer
 type: boolean
 ```
 
-Assertions are useful for hardware- or role-specific fragments that require a known base configuration.
+Assertions fail closed with a message naming the target, fragment, operation
+index, path, and the expectation.
 
 ---
 
 # Template rendering
 
-Fragment values should support strict Jinja-style substitution.
-
-Example:
+Fragment values support strict Jinja-style substitution.
 
 ```yaml
 hostname: "{{ identity_hostname }}"
 ```
 
-Use strict undefined-variable behavior.
+Use strict undefined-variable behavior. A missing variable must produce an error
+containing:
 
-A missing variable must produce an error containing:
-
-* machine name;
+* target name;
 * fragment name;
 * operation index;
 * missing variable name.
@@ -575,602 +558,263 @@ Do not silently substitute an empty string.
 
 ## Template scope
 
-Templates may appear in:
+Templates may appear in mapping values, list values, multiline strings,
+operation paths, and assertion values. Templates must not dynamically create new
+YAML structure by returning YAML text; rendering occurs on already-parsed scalar
+strings.
 
-* mapping values;
-* list values;
-* multiline strings;
-* operation paths, if needed;
-* fragment assertions.
-
-Templates should not be allowed to dynamically create new YAML structure by returning YAML text.
-
-Rendering occurs on already-parsed scalar strings.
-
-For example, this is supported:
-
-```yaml
-path: "/etc/sudoers.d/90-{{ identity_username }}-nopasswd"
-```
-
-This should not be supported:
-
-```yaml
-value: "{{ arbitrary_yaml_document }}"
-```
-
-when the variable is expected to be reparsed as YAML.
-
-Variables should remain typed when the entire scalar is a single template expression.
-
-Example inventory:
-
-```yaml
-enable_package_upgrade: false
-```
-
-Fragment:
+Variables remain typed when the entire scalar is a single template expression.
+For example, with `enable_package_upgrade: false`:
 
 ```yaml
 package_upgrade: "{{ enable_package_upgrade }}"
 ```
 
-The resulting value should be Boolean `false`, not string `"False"`.
-
-Use a native Jinja environment or equivalent behavior.
+yields Boolean `false`, not string `"False"`. Use a native Jinja environment or
+equivalent.
 
 ## Security
 
-Do not allow arbitrary Python execution from templates.
-
-Do not expose filesystem, environment, subprocess, or Python object internals to templates.
-
-Provide only a small set of safe filters, such as:
-
-```text
-default
-lower
-upper
-replace
-join
-tojson
-```
-
-Custom filters are optional for the initial release.
-
----
-
-# Initial fragment set
-
-The implementation should include representative fragments based on the current desired Ubuntu installation.
-
-## `base/autoinstall-base.yaml`
-
-```yaml
-fragment:
-  version: 1
-  name: base/autoinstall-base
-  description: Establish the required Ubuntu autoinstall structure.
-
-operations:
-  - op: set
-    path: /
-    value:
-      autoinstall:
-        version: 1
-
-  - op: merge
-    path: /autoinstall
-    value:
-      keyboard:
-        layout: "{{ keyboard_layout }}"
-      locale: "{{ locale }}"
-
-  - op: merge
-    path: /autoinstall/user-data
-    value:
-      package_update: true
-      package_upgrade: false
-```
-
-The renderer should emit `#cloud-config` before the rendered YAML, but that marker should not be represented as YAML data.
-
-## `base/default-user.yaml`
-
-```yaml
-fragment:
-  version: 1
-  name: base/default-user
-  description: Configure the primary admin user, SSH, and passwordless sudo.
-
-requires:
-  variables:
-    - identity_hostname
-    - identity_username
-    - identity_password_hash
-    - ssh_import_id
-
-operations:
-  - op: merge
-    path: /autoinstall
-    value:
-      identity:
-        hostname: "{{ identity_hostname }}"
-        username: "{{ identity_username }}"
-        password: "{{ identity_password_hash }}"
-
-      ssh:
-        install-server: true
-        allow-pw: false
-        import-id:
-          - "{{ ssh_import_id }}"
-
-  - op: append
-    path: /autoinstall/user-data/write_files
-    value:
-      - path: "/etc/sudoers.d/90-{{ identity_username }}-nopasswd"
-        owner: root:root
-        permissions: "0440"
-        content: |
-          {{ identity_username }} ALL=(ALL:ALL) NOPASSWD:ALL
-
-  - op: append
-    path: /autoinstall/user-data/runcmd
-    value:
-      - >-
-        visudo --check
-        --file="/etc/sudoers.d/90-{{ identity_username }}-nopasswd"
-```
-
-## `releases/ubuntu-24.04.yaml`
-
-```yaml
-fragment:
-  version: 1
-  name: releases/ubuntu-24.04
-  description: Ubuntu 24.04 Server installation source.
-
-operations:
-  - op: set
-    path: /autoinstall/source
-    value:
-      id: ubuntu-server-minimal
-      search_drivers: false
-```
-
-Do not place the HWE kernel in the generic release fragment because it may be hardware-specific.
-
-## `hardware/gb10.yaml`
-
-```yaml
-fragment:
-  version: 1
-  name: hardware/gb10
-  description: Configuration for GB10 physical hosts.
-
-requires:
-  variables:
-    - primary_interface
-
-operations:
-  - op: set
-    path: /autoinstall/kernel
-    value:
-      package: linux-generic-hwe-24.04
-
-  - op: set
-    path: /autoinstall/storage
-    value:
-      layout:
-        name: lvm
-        sizing-policy: all
-
-  - op: set
-    path: /autoinstall/network
-    value:
-      version: 2
-      ethernets:
-        primary:
-          match:
-            name: "{{ primary_interface }}"
-          dhcp4: true
-          dhcp6: false
-```
-
-## `roles/general-server.yaml`
-
-```yaml
-fragment:
-  version: 1
-  name: roles/general-server
-  description: Basic tools for a general-purpose Ubuntu server.
-
-operations:
-  - op: append
-    path: /autoinstall/user-data/packages
-    deduplicate: true
-    value:
-      - bind9-dnsutils
-      - ca-certificates
-      - curl
-      - iputils-ping
-      - vim-tiny
-```
-
-## `roles/proxmox-host.yaml`
-
-This fragment may initially be a placeholder until the exact Proxmox installation flow is decided.
-
-It should still demonstrate explicit composition:
-
-```yaml
-fragment:
-  version: 1
-  name: roles/proxmox-host
-  description: Bootstrap prerequisites for a future Proxmox host.
-
-operations:
-  - op: append
-    path: /autoinstall/user-data/packages
-    deduplicate: true
-    value:
-      - curl
-      - gnupg
-      - ca-certificates
-```
+Do not allow arbitrary Python execution from templates. Do not expose
+filesystem, environment, subprocess, or Python object internals. Provide only a
+small set of safe filters: `default`, `lower`, `upper`, `replace`, `join`,
+`tojson`. Custom filters are optional for the initial release.
 
 ---
 
 # Rendering algorithm
 
-For each requested machine:
+For each requested target:
 
-1. Load and validate the inventory.
-2. Resolve defaults, groups, and machine definition.
-3. Build the ordered variable map.
-4. Build the ordered fragment list.
-5. Load every referenced fragment.
-6. Validate each fragment against the fragment schema.
+1. Load the project configuration.
+2. Load and validate the inventory.
+3. Resolve defaults, groups, and the target definition.
+4. Build the ordered variable map.
+5. Build the ordered fragment list.
+6. Load every referenced fragment and validate it against the fragment schema.
 7. Start with an empty document.
-8. For each fragment:
-
+8. For each fragment, in order:
    1. verify required variables;
-   2. render templates using the machine variable map;
+   2. render templates using the target variable map;
    3. apply operations in listed order;
    4. record provenance for every changed path;
-   5. evaluate assertions.
-9. Run structural validation.
-10. Run optional external Subiquity validation.
-11. Serialize deterministic YAML.
-12. Prefix the output with:
+   5. evaluate `assert` operations as they are encountered.
+9. Run generic structural validation (unresolved-marker check; optional
+   project-supplied document schema).
+10. Serialize deterministic YAML.
+11. If the output has a template, inject the serialized YAML into it (replacing
+    `{{ document }}`); otherwise use the serialized YAML directly.
+12. Write the result to the configured output path (`{target}` substituted),
+    using a temporary file and atomic rename.
+13. Run any selected validators against the written output.
 
-```text
-#cloud-config
-```
-
-13. Write the rendered file to:
-
-```text
-rendered/<machine>/user-data
-```
-
-14. Optionally create an empty NoCloud metadata file:
-
-```text
-rendered/<machine>/meta-data
-```
-
-An optional metadata template may be added later.
+The renderer creates exactly the file(s) the project configures. It does not
+force any NoCloud `meta-data` or other companion files.
 
 ---
 
 # Provenance tracking
 
-The renderer should track which fragment and operation last modified each path.
-
-Example internal record:
-
-```yaml
-/autoinstall/kernel:
-  fragment: hardware/gb10
-  operation: 0
-  op: set
-
-/autoinstall/user-data/packages/0:
-  fragment: roles/general-server
-  operation: 0
-  op: append
-```
-
-Expose this through:
-
-```bash
-autoinstall-render explain gb10-01
-```
-
-Example output:
+The renderer tracks which fragment and operation last modified each path.
 
 ```text
 /autoinstall/kernel/package
   value: linux-generic-hwe-24.04
-  source: hardware/gb10 operation 1
-
-/autoinstall/network/ethernets/primary/match/name
-  value: enP7s7
-  source: hardware/gb10 operation 3
+  source: hardware/gb10 operation 0
 
 /autoinstall/user-data/packages
   contributors:
-    - roles/general-server operation 1
-    - roles/proxmox-host operation 1
+    - roles/general-server operation 0
 ```
 
-Also support querying one path:
+Expose through:
 
 ```bash
-autoinstall-render explain gb10-01 \
-  /autoinstall/network
+yaml-frag explain gb10-01
+yaml-frag explain gb10-01 /autoinstall/storage
 ```
-
-Provenance is important because fragments are intentionally layered and later overrides must be inspectable.
 
 ---
 
 # Conflict reporting
 
-When a fragment replaces an existing value, the renderer should support warning output.
-
-Example:
+When a `set` replaces an existing value, emit a warning by default:
 
 ```text
-warning: hardware/gb10 operation 1 replaced
-/autoinstall/kernel
-
-previous source: releases/ubuntu-24.04
-new source: hardware/gb10
+warning: hardware/gb10 operation 0 replaced /autoinstall/kernel
+  previous source: ubuntu-24.04
+  new source: hardware/gb10
 ```
 
-Normal `set` operations may replace existing values without failing, because replacement is explicit.
-
-However, warnings should be enabled by default.
-
-Allow:
-
-```bash
---quiet-overrides
-```
-
-to suppress these warnings.
-
-A `merge` operation encountering an incompatible type must fail.
-
-Example:
+Suppress with `--quiet-overrides`. A `merge` encountering an incompatible type
+must fail:
 
 ```text
-cannot merge mapping into list at
-/autoinstall/user-data/packages
-
-existing value from: roles/general-server
-incoming value from: hosts/gb10-01
+cannot merge mapping into list at /autoinstall/user-data/packages
+  existing value from: roles/general-server
+  incoming value from: hosts/gb10-01
 ```
 
 ---
 
 # Validation
 
-## Inventory validation
+There are four clearly separable validation concerns. Only the first two are
+built into the renderer; the last two are supplied by the project.
 
-Validate:
+## Input validation (built in)
 
-* inventory version;
-* unique machine names;
-* unique group names;
-* groups referenced by machines exist;
-* fragments are lists of strings;
-* variables are mappings;
-* machine fragment order is preserved;
-* group inheritance cycles are impossible or rejected.
+* **Inventory** (against `schemas/inventory.schema.json` plus structural rules):
+  inventory version; unique target names; unique group names; referenced groups
+  exist; fragments are lists of strings; variables are mappings; order
+  preserved; group cycles rejected if nested groups are implemented.
+* **Fragments** (against `schemas/fragment.schema.json` plus rules): supported
+  fragment version; name matches path; recognized `op`; valid path;
+  op-appropriate fields present; `append`/`prepend` values are lists; `merge`
+  values are mappings; assertions use supported forms.
+* **Project configuration** (against `schemas/project.schema.json`).
 
-Nested groups are optional for the first version.
+## Generic rendered-document validation (built in)
 
-If nested groups are implemented, cycles must be detected.
+The renderer performs only document-agnostic checks:
 
-## Fragment validation
+* reject unresolved template markers (text containing `{{` or `{%`);
+* if `output.schema` is set, validate the rendered document against that JSON
+  schema.
 
-Validate:
+The renderer does **not** contain any hard-coded structural expectations (no
+`autoinstall.version`, no required `identity`/`ssh`/`storage`/`network` rules).
 
-* fragment version is supported;
-* fragment name matches its file path;
-* operation is recognized;
-* path is valid;
-* required fields exist for the selected operation;
-* `append` and `prepend` values are lists;
-* `merge` values are mappings;
-* assertions use supported forms.
+## Document assertions (project supplied, via fragments)
 
-## Rendered-document validation
+Any document-specific structural requirement is expressed as `assert`
+operations in fragments. The example project ships an `autoinstall/checks`
+fragment asserting the autoinstall structure (version, identity fields, ssh
+booleans, storage presence), and per-hardware fragments assert their own
+additions (e.g. `network.version == 2`). Assertions run as part of rendering and
+fail closed.
 
-At minimum, require:
+## Named validators (project supplied, external)
 
-```yaml
-autoinstall:
-  version: 1
-```
-
-Reject unresolved template markers matching patterns such as:
-
-```text
-{{ ...
-{% ...
-```
-
-Validate that:
-
-* `identity.hostname` is a nonempty string;
-* `identity.username` is a nonempty string;
-* `identity.password` is a nonempty string;
-* `ssh.install-server` is Boolean;
-* `ssh.allow-pw` is Boolean;
-* `storage` exists;
-* `network.version` is `2`, when network configuration exists;
-* `user-data.packages` is a list, when present;
-* `user-data.write_files` is a list, when present;
-* `user-data.runcmd` is a list, when present.
-
-Do not attempt to duplicate the complete Subiquity schema manually.
-
-## Optional Subiquity validation
-
-Support an optional external validation command.
-
-Example configuration:
-
-```yaml
-validation:
-  command:
-    - python3
-    - tools/validate-autoinstall-user-data.py
-```
-
-CLI:
+Projects may declare named validators in the project config. Select them with a
+repeatable `--validator NAME`; if none is given, the output's default validators
+run. Each validator runs an external command against the written output file and
+fails on nonzero exit. This replaces the old autoinstall-specific `--subiquity`
+flag with a generic mechanism.
 
 ```bash
-autoinstall-render validate gb10-01 --subiquity
+yaml-frag validate gb10-01 --validator subiquity
 ```
 
-The renderer should clearly distinguish:
-
-* internal renderer validation;
-* YAML parsing;
-* optional Subiquity validation.
+The CLI must clearly distinguish internal validation, YAML parsing, and external
+validator failures.
 
 ---
 
 # YAML serialization
 
-Output should be stable and diff-friendly.
+Output must be stable and diff-friendly:
 
-Requirements:
-
-* preserve mapping insertion order;
-* use two-space indentation;
+* preserve mapping insertion order (do not sort keys);
+* two-space indentation;
 * never emit Python-specific YAML tags;
-* emit Booleans as `true` and `false`;
+* emit Booleans as `true`/`false`;
 * quote strings only when necessary;
-* preserve multiline strings using block style where practical;
-* end files with one newline;
-* prefix with `#cloud-config`;
-* do not sort keys alphabetically.
+* prefer block style for multiline strings;
+* end files with exactly one newline.
 
-Exact comment preservation is not required.
-
-The rendered file should prioritize correctness and stable diffs over reproducing fragment formatting exactly.
-
-Use a mature YAML library such as `ruamel.yaml` when useful for formatting, although PyYAML is acceptable if deterministic output requirements are met.
+Any header such as `#cloud-config` comes from the output template, not the
+serializer. Use `ruamel.yaml` (recommended) or PyYAML if determinism is met.
 
 ---
 
 # Command-line interface
 
-The executable should be named:
+The executable is named `yaml-frag`.
+
+Global option available to all commands:
 
 ```text
-autoinstall-render
+--config PATH        project configuration (default: yaml-frag.yaml)
 ```
 
-## Render one machine
+## Render one target
 
 ```bash
-autoinstall-render render gb10-01
+yaml-frag render gb10-01
 ```
 
-Default output:
-
-```text
-rendered/gb10-01/user-data
-rendered/gb10-01/meta-data
-```
-
-Options:
+Writes the configured output path. Options:
 
 ```text
 --inventory PATH
 --fragments-dir PATH
---output PATH
+--output PATH            override the destination path for this render
 --secrets PATH
 --var KEY=VALUE
---stdout
+--validator NAME         run a named validator (repeatable)
+--stdout                 print rendered output to stdout instead of writing
 --dry-run
 --quiet-overrides
---no-validate
+--no-validate            skip generic validation and validators
 ```
 
-`--stdout` should print only the rendered configuration to standard output.
+`--stdout` prints only the rendered output; all diagnostics go to stderr.
 
-Diagnostics must go to standard error.
-
-## Render all machines
+## Render all targets
 
 ```bash
-autoinstall-render render-all
+yaml-frag render-all
 ```
 
-Render every machine in inventory order.
-
-Return nonzero if any machine fails.
-
-Do not leave a partially written final output file for a failed machine.
-
-Use temporary files and atomic rename.
+Render every target in inventory order. Return nonzero if any fails. Never leave
+a partially written final output file for a failed target (temp file + atomic
+rename).
 
 ## Validate
 
 ```bash
-autoinstall-render validate gb10-01
-autoinstall-render validate-all
+yaml-frag validate gb10-01 [--validator NAME]
+yaml-frag validate-all [--validator NAME]
 ```
 
-Validation should render in memory without writing output unless explicitly requested.
+Validation renders in memory without writing output unless explicitly requested.
+External validators that require a file operate on a temporary render.
 
 ## Explain
 
 ```bash
-autoinstall-render explain gb10-01
-autoinstall-render explain gb10-01 /autoinstall/storage
+yaml-frag explain gb10-01
+yaml-frag explain gb10-01 /autoinstall/storage
 ```
 
 ## List
 
 ```bash
-autoinstall-render list machines
-autoinstall-render list fragments
-autoinstall-render list groups
+yaml-frag list targets
+yaml-frag list fragments
+yaml-frag list groups
 ```
 
 ## Show resolved inputs
 
 ```bash
-autoinstall-render inspect gb10-01
+yaml-frag inspect gb10-01
 ```
 
-Output:
-
 ```yaml
-machine: gb10-01
-
+target: gb10-01
 groups:
   - gb10
-  - proxmox_hosts
-
+  - general_servers
 fragments:
-  - base/autoinstall-base
-  - base/default-user
-  - releases/ubuntu-24.04
-  - sites/home
+  - autoinstall/base
+  - autoinstall/default-user
+  - ubuntu-24.04
   - hardware/gb10
-  - roles/proxmox-host
+  - roles/general-server
   - hosts/gb10-01
-
+  - autoinstall/checks
 variables:
   identity_hostname: gb10-01
   identity_username: chris
@@ -1179,62 +823,42 @@ variables:
   primary_interface: enP7s7
 ```
 
-Automatically redact variables whose names contain:
-
-```text
-password
-secret
-token
-private
-credential
-```
-
-Provide an explicit unsafe option if full values are ever needed:
-
-```bash
---show-secrets
-```
+Automatically redact variables whose names contain any of: `password`,
+`secret`, `token`, `private`, `credential`. Provide `--show-secrets` to reveal
+full values.
 
 ---
 
 # Python requirements
 
-Target Python 3.12 or later.
-
-Use type annotations throughout.
-
-Recommended dependencies:
+Target Python 3.12+. Use type annotations throughout. Recommended dependencies:
 
 ```text
-click or typer
+click
 pydantic
 jinja2
-ruamel.yaml or pyyaml
+ruamel.yaml
 jsonschema
 ```
 
-Possible architecture:
+Suggested value objects:
 
 ```python
 @dataclass(frozen=True)
-class MachineDefinition:
+class TargetDefinition:
     name: str
-    groups: list[str]
-    fragments: list[str]
+    groups: tuple[str, ...]
+    fragments: tuple[str, ...]
     variables: dict[str, object]
-```
 
-```python
 @dataclass(frozen=True)
 class FragmentOperation:
     op: str
     path: str
-    value: object | None
+    value: object | None = None
     deduplicate: bool = False
     missing_ok: bool = False
-```
 
-```python
 @dataclass(frozen=True)
 class ProvenanceEntry:
     fragment: str
@@ -1242,19 +866,22 @@ class ProvenanceEntry:
     operation: str
 ```
 
-Use custom exception types:
+Custom exception types:
 
 ```text
+ConfigError
 InventoryError
 FragmentError
 TemplateRenderError
 MergeConflictError
+AssertionFailedError
 ValidationError
-UnknownMachineError
+UnknownTargetError
 UnknownFragmentError
 ```
 
-Every user-facing error should include enough context to find the source file and operation.
+Every user-facing error must include enough context to find the source file and
+operation.
 
 ---
 
@@ -1262,161 +889,73 @@ Every user-facing error should include enough context to find the source file an
 
 ## Appending packages
 
-Base fragment:
-
 ```yaml
-operations:
-  - op: append
-    path: /autoinstall/user-data/packages
-    value:
-      - curl
-      - ca-certificates
+# earlier fragment
+- op: append
+  path: /autoinstall/user-data/packages
+  value: [curl, ca-certificates]
+# later fragment
+- op: append
+  path: /autoinstall/user-data/packages
+  deduplicate: true
+  value: [curl, qemu-guest-agent]
 ```
 
-Role fragment:
+Result: `[curl, ca-certificates, qemu-guest-agent]`.
+
+## Replacing a scalar object
 
 ```yaml
-operations:
-  - op: append
-    path: /autoinstall/user-data/packages
-    deduplicate: true
-    value:
-      - curl
-      - qemu-guest-agent
+# earlier: set /autoinstall/kernel -> {package: linux-generic}
+# later:   set /autoinstall/kernel -> {package: linux-generic-hwe-24.04}
 ```
 
-Result:
+Result: `{package: linux-generic-hwe-24.04}`; renderer emits an override
+warning.
 
-```yaml
-packages:
-  - curl
-  - ca-certificates
-  - qemu-guest-agent
-```
+## Extending a list of mappings
 
-## Replacing the kernel
-
-Earlier fragment:
-
-```yaml
-operations:
-  - op: set
-    path: /autoinstall/kernel
-    value:
-      package: linux-generic
-```
-
-Later fragment:
-
-```yaml
-operations:
-  - op: set
-    path: /autoinstall/kernel
-    value:
-      package: linux-generic-hwe-24.04
-```
-
-Result:
-
-```yaml
-kernel:
-  package: linux-generic-hwe-24.04
-```
-
-The renderer should emit an override warning.
-
-## Extending `write_files`
-
-Earlier fragment:
-
-```yaml
-operations:
-  - op: append
-    path: /autoinstall/user-data/write_files
-    value:
-      - path: /etc/example-a
-        content: a
-```
-
-Later fragment:
-
-```yaml
-operations:
-  - op: append
-    path: /autoinstall/user-data/write_files
-    value:
-      - path: /etc/example-b
-        content: b
-```
-
-Result:
-
-```yaml
-write_files:
-  - path: /etc/example-a
-    content: a
-  - path: /etc/example-b
-    content: b
-```
-
-Do not attempt to merge list entries based on their `path` fields automatically.
-
-If a later fragment wants to replace the full list, it must use `set`.
-
-## Removing a default
-
-Earlier fragment:
-
-```yaml
-operations:
-  - op: set
-    path: /autoinstall/user-data/package_upgrade
-    value: false
-```
-
-Later fragment:
-
-```yaml
-operations:
-  - op: remove
-    path: /autoinstall/user-data/package_upgrade
-```
-
-The final document omits the field.
+Two `append` operations to `/autoinstall/user-data/write_files` concatenate the
+entries. The renderer never merges list entries by a key field; to replace the
+whole list, use `set`.
 
 ---
 
-# Complete expected render
+# Example project: Ubuntu autoinstall
 
-For a GB10 host, an expected output should resemble:
+The repository ships a complete example that renders Ubuntu 24.04 autoinstall
+`user-data`, demonstrating that all autoinstall specifics live in data:
+
+* `yaml-frag.yaml` sets `output.template: templates/user-data.tmpl` (which adds
+  the `#cloud-config` header) and `output.path: rendered/{target}/user-data`,
+  and declares the optional `subiquity` validator.
+* `fragments/autoinstall/base.yaml`, `default-user.yaml`, and `checks.yaml`,
+  `fragments/ubuntu-24.04.yaml`, `fragments/hardware/*`, `fragments/roles/*`,
+  and `fragments/hosts/*` build and assert the document.
+* No autoinstall knowledge exists in `src/yaml_frag/`.
+
+## Complete expected render (target `gb10-01`)
 
 ```yaml
 #cloud-config
 autoinstall:
   version: 1
-
   kernel:
     package: linux-generic-hwe-24.04
-
   source:
     id: ubuntu-server-minimal
     search_drivers: false
-
   keyboard:
     layout: us
-
   locale: en_US.UTF-8
-
   identity:
     hostname: gb10-01
     username: chris
     password: "$6$example-salt$example-hash"
-
   storage:
     layout:
       name: lvm
       sizing-policy: all
-
   network:
     version: 2
     ethernets:
@@ -1425,130 +964,80 @@ autoinstall:
           name: enP7s7
         dhcp4: true
         dhcp6: false
-
   ssh:
     install-server: true
     allow-pw: false
     import-id:
       - gh:chpatton013
-
   user-data:
     package_update: true
     package_upgrade: false
-
     packages:
       - bind9-dnsutils
       - ca-certificates
       - curl
       - iputils-ping
       - vim-tiny
-
     write_files:
       - path: /etc/sudoers.d/90-chris-nopasswd
         owner: root:root
         permissions: "0440"
         content: |
           chris ALL=(ALL:ALL) NOPASSWD:ALL
-
     runcmd:
       - >-
         visudo --check
         --file="/etc/sudoers.d/90-chris-nopasswd"
 ```
 
-Blank-line placement does not need to match this example exactly, but the YAML data must.
+Blank-line placement need not match exactly, but the YAML data and the
+`#cloud-config` header must.
 
 ---
 
 # Testing requirements
 
-## Unit tests
+## Unit tests (merge/templating/pointer/provenance)
 
-Test each operation independently:
-
-* set root;
-* set nested path;
-* merge nested mappings;
-* reject mapping/list conflicts;
-* append to missing list;
-* append to existing list;
-* append with deduplication;
-* prepend;
-* remove;
-* remove missing with and without `missing_ok`;
-* remove list items;
-* assertions;
-* JSON Pointer escaping;
-* strict missing-variable failures;
-* typed template values;
-* fragment-name mismatch;
-* provenance recording.
+set root; set nested path; merge nested mappings; reject mapping/list conflicts;
+append to missing/existing list; append with dedup; prepend; remove; remove with
+and without `missing_ok`; remove-list-items; assertions; JSON Pointer escaping;
+strict missing-variable failures; typed template values; fragment-name mismatch;
+provenance recording; override warning.
 
 ## Inventory tests
 
-Test:
+default/group/target/CLI variable precedence; group order; fragment order;
+missing groups; missing fragments; duplicate targets; secret overlay.
 
-* default variables;
-* group variable precedence;
-* machine variable precedence;
-* CLI variable precedence;
-* group order;
-* fragment order;
-* missing groups;
-* missing fragments;
-* duplicate machine definitions;
-* secret overlay behavior.
+## Config tests
+
+load defaults; output path substitution; output template injection of
+`{{ document }}`; validator selection resolution.
 
 ## Snapshot tests
 
-Render representative machines and compare with committed expected YAML files.
-
-At minimum:
-
-```text
-generic-vm-01
-gb10-01
-gb10-02
-```
-
-The two GB10 hosts should differ only in host-specific variables unless their inventory explicitly selects different fragments.
+Render representative targets and compare with committed expected files:
+`generic-vm-01`, `gb10-01`, `gb10-02`. The two GB10 hosts differ only in
+host-specific variables unless their inventory selects different fragments.
 
 ## CLI tests
 
-Test:
-
-* successful render;
-* render to stdout;
-* render-all;
-* validation failure exit codes;
-* missing machine;
-* explain output;
-* redaction;
-* atomic output behavior;
-* diagnostics on stderr.
+successful render; render to stdout; render-all; validation failure exit codes;
+missing target; explain output; redaction; atomic output; diagnostics on stderr;
+`--validator` selection.
 
 ## Error-message tests
 
-Errors should include actionable context.
-
-Good:
+Errors include actionable context, e.g.:
 
 ```text
-gb10-01: fragment hardware/gb10, operation 2:
-missing required variable "primary_interface"
-```
-
-Bad:
-
-```text
-KeyError: primary_interface
+gb10-01: fragment hardware/gb10, operation 2: missing required variable "primary_interface"
 ```
 
 ---
 
 # Exit codes
-
-Use stable exit codes:
 
 ```text
 0  success
@@ -1557,56 +1046,35 @@ Use stable exit codes:
 3  inventory validation failure
 4  fragment validation failure
 5  merge conflict
-6  rendered configuration validation failure
+6  rendered-document validation failure (generic validation, schema, assertion, or validator)
+7  project-configuration error
 ```
 
-Exact values may change, but they must be documented and tested.
+Values may change but must be documented and tested.
 
 ---
 
 # Non-goals for the initial version
 
-Do not implement these initially:
+Do not implement: a web interface; dynamic Python plugins; arbitrary template
+code execution; array-index mutation; semantic merging of list entries;
+key-aware list merges; multiple output files per target; automatic hardware
+discovery; PXE/TFTP/DHCP configuration; deployment to HTTP servers; secret
+manager integration; reimplementing any full document schema (e.g. Subiquity);
+running Ansible; installing Ubuntu.
 
-* a web interface;
-* dynamic Python plugins;
-* arbitrary template code execution;
-* automatic hardware discovery;
-* automatic PXE server configuration;
-* deployment to HTTP servers;
-* DHCP configuration;
-* TFTP configuration;
-* secret-manager integration;
-* array-index mutation;
-* semantic merging of `write_files` entries;
-* semantic merging of Netplan interfaces;
-* complete Subiquity schema reimplementation;
-* running Ansible;
-* installing Ubuntu directly.
-
-The renderer’s job is to produce correct, inspectable configuration artifacts.
+The renderer's job is to produce correct, inspectable YAML artifacts.
 
 ---
 
 # Future extensions
 
-Design should leave room for:
-
-* NoCloud `meta-data` rendering;
-* per-machine `vendor-data`;
-* PXE or iPXE script generation;
-* automatic publishing to an HTTP directory;
-* secret retrieval from a password manager;
-* machine enrollment states such as `provisioning_enabled`;
-* output formats for cloud-init outside Subiquity;
-* AWS EC2 user-data rendering;
-* Proxmox cloud-init snippets;
-* FreeBSD-specific profiles;
-* schema-aware validation for multiple Ubuntu releases;
-* encrypted autoinstall configurations;
-* fragment deprecation warnings;
-* fragment dependency declarations;
-* optional fragment conditions.
+Room for: multiple named outputs per target; per-target metadata files;
+PXE/iPXE script generation; publishing to an HTTP directory; secret retrieval
+from a password manager; target enrollment states; additional built-in
+validators; schema-aware validation for multiple document families; encrypted
+outputs; fragment deprecation warnings; fragment dependency declarations;
+optional fragment conditions.
 
 Do not implement these at the expense of a clear first version.
 
@@ -1614,38 +1082,33 @@ Do not implement these at the expense of a clear first version.
 
 # Acceptance criteria
 
-The implementation is complete when:
-
-1. A machine can be defined in inventory with ordered groups and fragments.
-2. Fragments can explicitly set, merge, append, prepend, remove, and assert values.
+1. A target can be defined in inventory with ordered groups and fragments.
+2. Fragments can explicitly set, merge, append, prepend, remove, and assert.
 3. Missing template variables fail with useful diagnostics.
-4. The renderer produces deterministic Ubuntu autoinstall YAML.
-5. The rendered file begins with `#cloud-config`.
-6. The renderer creates a NoCloud-compatible `user-data` file.
-7. Package lists from multiple fragments can be appended without accidental replacement.
-8. Hardware-specific fragments can replace kernel, storage, and network configuration.
-9. Host-specific variables can supply hostname, username, password hash, SSH import identity, and interface name.
-10. The renderer can explain where final values came from.
+4. The renderer produces deterministic YAML with no built-in schema knowledge.
+5. Output can be wrapped in a project-supplied template (e.g. `#cloud-config`).
+6. The output path is configurable; no companion files are forced.
+7. Lists from multiple fragments append without accidental replacement.
+8. Fragments can replace kernel, storage, and network configuration.
+9. Target variables can supply hostname, username, password hash, SSH identity,
+   and interface name.
+10. The renderer explains where final values came from.
 11. Secret-looking values are redacted from inspection output.
-12. Invalid inventory, fragments, or rendered documents return nonzero.
-13. Tests cover merge behavior, precedence, rendering, provenance, and CLI behavior.
-14. A GB10 inventory entry renders the expected configuration shown above.
-15. The project includes a README explaining installation, repository structure, fragment authoring, inventory authoring, and CLI usage.
+12. Invalid config, inventory, fragments, or rendered documents return nonzero.
+13. Document-specific requirements are enforced via fragment assertions and
+    project-configured validators, not built-in renderer logic.
+14. Named validators are selectable with `--validator`.
+15. Tests cover merge, precedence, config, rendering, provenance, and CLI.
+16. The example autoinstall project renders the expected `gb10-01` output above.
+17. The README explains installation, structure, project config, fragment and
+    inventory authoring, and CLI usage.
 
 ---
 
 # Implementation preference
 
-Favor a small, unsurprising implementation over a highly abstract framework.
-
-The most important properties are:
-
-* deterministic ordering;
-* explicit list behavior;
-* strict validation;
-* good diagnostics;
-* inspectable provenance;
-* straightforward Git review.
-
-Avoid implementing “smart” merge behavior that guesses what the user intended.
-
+Favor a small, unsurprising implementation over a highly abstract framework. The
+most important properties are: deterministic ordering; explicit list behavior;
+strict validation; good diagnostics; inspectable provenance; a renderer with no
+domain knowledge; straightforward Git review. Avoid "smart" merge behavior that
+guesses intent.
