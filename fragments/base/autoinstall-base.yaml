@@ -1,0 +1,24 @@
+fragment:
+  version: 1
+  name: base/autoinstall-base
+  description: Establish the required Ubuntu autoinstall structure.
+
+operations:
+  - op: set
+    path: /
+    value:
+      autoinstall:
+        version: 1
+
+  - op: merge
+    path: /autoinstall
+    value:
+      keyboard:
+        layout: "{{ keyboard_layout }}"
+      locale: "{{ locale }}"
+
+  - op: merge
+    path: /autoinstall/user-data
+    value:
+      package_update: true
+      package_upgrade: false

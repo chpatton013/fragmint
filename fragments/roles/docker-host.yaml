@@ -1,0 +1,15 @@
+fragment:
+  version: 1
+  name: roles/docker-host
+  description: Prerequisite packages for a Docker host.
+
+# Placeholder demonstrating explicit composition; refine once the Docker
+# install flow is decided (e.g. add the Docker apt repo via write_files/runcmd).
+operations:
+  - op: append
+    path: /autoinstall/user-data/packages
+    deduplicate: true
+    value:
+      - ca-certificates
+      - curl
+      - gnupg

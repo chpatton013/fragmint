@@ -1,0 +1,14 @@
+fragment:
+  version: 1
+  name: sites/home
+  description: Home-site defaults.
+
+# Intentionally contributes no data yet so the gb10-01 render matches PLAN.md's
+# "Complete expected render" exactly. Real site config (NTP servers, apt
+# mirror, timezone, DNS search domains) should be added here later. The assert
+# documents this fragment's dependency on the base structure without mutating
+# the document. See PLAN.md "assert".
+operations:
+  - op: assert
+    path: /autoinstall/version
+    equals: 1

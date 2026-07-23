@@ -1,0 +1,15 @@
+fragment:
+  version: 1
+  name: roles/proxmox-host
+  description: Bootstrap prerequisites for a future Proxmox host.
+
+# Placeholder until the exact Proxmox installation flow is decided. It still
+# demonstrates explicit composition. See PLAN.md "roles/proxmox-host.yaml".
+operations:
+  - op: append
+    path: /autoinstall/user-data/packages
+    deduplicate: true
+    value:
+      - curl
+      - gnupg
+      - ca-certificates

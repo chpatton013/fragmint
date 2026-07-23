@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Rendered output (keep the directory, ignore its contents)
+/rendered/*
+!/rendered/.gitkeep
+
+# Local, untracked secrets overlay (see PLAN.md "Optional external secret variables")
+inventory/secrets.yaml

@@ -1,0 +1,5 @@
+# Reserved for a future split of group definitions out of machines.yaml.
+# For the first version, groups are defined in machines.yaml under the
+# top-level `groups:` key. See PLAN.md "Suggested repository layout".
+#
+# Do not load this file yet; it exists to document the intended layout.

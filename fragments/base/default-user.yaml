@@ -1,0 +1,42 @@
+fragment:
+  version: 1
+  name: base/default-user
+  description: Configure the primary admin user, SSH, and passwordless sudo.
+
+requires:
+  variables:
+    - identity_hostname
+    - identity_username
+    - identity_password_hash
+    - ssh_import_id
+
+operations:
+  - op: merge
+    path: /autoinstall
+    value:
+      identity:
+        hostname: "{{ identity_hostname }}"
+        username: "{{ identity_username }}"
+        password: "{{ identity_password_hash }}"
+
+      ssh:
+        install-server: true
+        allow-pw: false
+        import-id:
+          - "{{ ssh_import_id }}"
+
+  - op: append
+    path: /autoinstall/user-data/write_files
+    value:
+      - path: "/etc/sudoers.d/90-{{ identity_username }}-nopasswd"
+        owner: root:root
+        permissions: "0440"
+        content: |
+          {{ identity_username }} ALL=(ALL:ALL) NOPASSWD:ALL
+
+  - op: append
+    path: /autoinstall/user-data/runcmd
+    value:
+      - >-
+        visudo --check
+        --file="/etc/sudoers.d/90-{{ identity_username }}-nopasswd"

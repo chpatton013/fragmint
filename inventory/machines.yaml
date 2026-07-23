@@ -1,0 +1,85 @@
+# Primary inventory: defaults, groups, and machines.
+# See PLAN.md "Inventory format".
+#
+# NOTE for the implementer: the layout in PLAN.md also lists inventory/groups.yaml.
+# For the first version, groups live here in this single file; groups.yaml is a
+# reserved placeholder for a future split. --inventory points at ONE file.
+version: 1
+
+defaults:
+  variables:
+    identity_username: chris
+    ssh_import_id: gh:chpatton013
+    locale: en_US.UTF-8
+    keyboard_layout: us
+
+  fragments:
+    - base/autoinstall-base
+    - base/default-user
+    - releases/ubuntu-24.04
+    - sites/home
+
+groups:
+  gb10:
+    variables:
+      hardware_model: gb10
+    fragments:
+      - hardware/gb10
+
+  generic_vm:
+    variables:
+      hardware_model: generic-vm
+    fragments:
+      - hardware/generic-vm
+
+  general_servers:
+    fragments:
+      - roles/general-server
+
+  # NOTE: PLAN.md's "complete expected render" for gb10-01 shows the
+  # general-server package set WITHOUT proxmox's gnupg, even though the
+  # inventory example lists proxmox_hosts. These two examples in PLAN.md are
+  # mutually inconsistent. This skeleton keeps proxmox on its own machine so
+  # the gb10-01 snapshot can match the documented expected output exactly.
+  # The implementer should reconcile per acceptance criterion 14.
+  proxmox_hosts:
+    fragments:
+      - roles/proxmox-host
+
+  docker_hosts:
+    fragments:
+      - roles/docker-host
+
+machines:
+  gb10-01:
+    groups:
+      - gb10
+      - general_servers
+    fragments:
+      - hosts/gb10-01
+    variables:
+      identity_hostname: gb10-01
+      identity_password_hash: "$6$example-salt$example-hash"
+      primary_interface: enP7s7
+
+  gb10-02:
+    groups:
+      - gb10
+      - general_servers
+    fragments:
+      - hosts/gb10-02
+    variables:
+      identity_hostname: gb10-02
+      identity_password_hash: "$6$example-salt$example-hash"
+      primary_interface: enP7s7
+
+  generic-vm-01:
+    groups:
+      - generic_vm
+      - general_servers
+    fragments:
+      - hosts/generic-vm-01
+    variables:
+      identity_hostname: generic-vm-01
+      identity_password_hash: "$6$example-salt$example-hash"
+      primary_interface: enp1s0

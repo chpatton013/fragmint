@@ -1,0 +1,32 @@
+fragment:
+  version: 1
+  name: hardware/gb10
+  description: Configuration for GB10 physical hosts.
+
+requires:
+  variables:
+    - primary_interface
+
+operations:
+  - op: set
+    path: /autoinstall/kernel
+    value:
+      package: linux-generic-hwe-24.04
+
+  - op: set
+    path: /autoinstall/storage
+    value:
+      layout:
+        name: lvm
+        sizing-policy: all
+
+  - op: set
+    path: /autoinstall/network
+    value:
+      version: 2
+      ethernets:
+        primary:
+          match:
+            name: "{{ primary_interface }}"
+          dhcp4: true
+          dhcp6: false

@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/autoinstall/inventory.schema.json",
+  "title": "Autoinstall inventory",
+  "description": "Structural schema for the inventory file. Cross-cutting rules (unique names, referenced groups exist, order preservation) are enforced in inventory.py, not here. See PLAN.md 'Inventory validation'.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "machines"],
+  "properties": {
+    "version": { "const": 1 },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "variables": { "$ref": "#/$defs/variables" },
+        "fragments": { "$ref": "#/$defs/fragmentList" }
+      }
+    },
+    "groups": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/group" }
+    },
+    "machines": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/machine" }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        }
+      }
+    }
+  },
+  "$defs": {
+    "variables": {
+      "type": "object",
+      "description": "Free-form mapping of variable name to value."
+    },
+    "fragmentList": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "variables": { "$ref": "#/$defs/variables" },
+        "fragments": { "$ref": "#/$defs/fragmentList" }
+      }
+    },
+    "machine": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "groups": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "fragments": { "$ref": "#/$defs/fragmentList" },
+        "variables": { "$ref": "#/$defs/variables" }
+      }
+    }
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/autoinstall/fragment.schema.json",
+  "title": "Autoinstall fragment",
+  "description": "Structural schema for a fragment file. Per-op value-shape rules (append/prepend require list values, merge requires mapping values, assert forms) and the name/path match are enforced in fragments.py in addition to this schema. See PLAN.md 'Fragment format' and 'Fragment validation'.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["fragment", "operations"],
+  "properties": {
+    "fragment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "name", "description"],
+      "properties": {
+        "version": { "const": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string" }
+      }
+    },
+    "requires": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "variables": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "operations": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/operation" }
+    }
+  },
+  "$defs": {
+    "path": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "operation": {
+      "type": "object",
+      "required": ["op", "path"],
+      "properties": {
+        "op": {
+          "enum": [
+            "set",
+            "merge",
+            "append",
+            "prepend",
+            "remove",
+            "remove-list-items",
+            "assert"
+          ]
+        },
+        "path": { "$ref": "#/$defs/path" },
+        "value": {},
+        "deduplicate": { "type": "boolean" },
+        "missing_ok": { "type": "boolean" },
+        "equals": {},
+        "exists": { "type": "boolean" },
+        "type": {
+          "enum": ["mapping", "list", "string", "integer", "boolean"]
+        }
+      }
+    }
+  }
+}
