@@ -29,7 +29,6 @@ class ProvenanceTracker:
     def __init__(self) -> None:
         self.entries: dict[str, list[ProvenanceEntry]] = {}
         self.overrides: list[str] = []
-        raise NotImplementedError
 
     def record(
         self,
@@ -43,8 +42,20 @@ class ProvenanceTracker:
         When ``replaced_existing`` is true and a prior entry exists for the
         path, append a formatted override warning to :attr:`overrides`.
         """
-        raise NotImplementedError
+        history = self.entries.setdefault(path, [])
+        if replaced_existing and history:
+            previous = history[-1]
+            self.overrides.append(
+                f"warning: {entry.fragment} operation {entry.operation_index} "
+                f"replaced {path}\n"
+                f"  previous source: {previous.fragment}\n"
+                f"  new source: {entry.fragment}"
+            )
+        history.append(entry)
 
     def last_source(self, path: str) -> ProvenanceEntry | None:
         """Return the most recent entry for ``path``, or ``None``."""
-        raise NotImplementedError
+        history = self.entries.get(path)
+        if not history:
+            return None
+        return history[-1]

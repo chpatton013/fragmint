@@ -13,9 +13,21 @@ The functions here are pure with respect to the filesystem where practical:
 
 from __future__ import annotations
 
+import os
+import tempfile
+from dataclasses import replace
 from pathlib import Path
 
-from .models import OutputSpec, ProjectConfig, RenderResult, Variables
+from . import fragments as fragments_mod
+from . import merge
+from . import sources
+from . import templating
+from . import validation
+from . import yamlio
+from .errors import TemplateRenderError
+from .inventory import load_inventory, load_secret_store, resolve_target
+from .models import OutputSpec, ProjectConfig, ProvenanceEntry, RenderResult, SecretStore, Variables, YamlValue
+from .provenance import ProvenanceTracker
 from .sources import CommandRunner
 
 #: Literal token an output template may contain; replaced by the serialized
@@ -37,6 +49,7 @@ def render_target(
     secrets_path: Path | None = None,
     runner: CommandRunner | None = None,
     validate: bool = True,
+    redact_sources: bool = False,
 ) -> RenderResult:
     """Render a single target in memory.
 
@@ -58,10 +71,72 @@ def render_target(
     8. return the :class:`~models.RenderResult`.
 
     ``runner`` is injectable so tests can resolve captures deterministically
-    without running real programs. Serialization and output templating happen in
+    without running real programs. When ``redact_sources`` is true, secret and
+    capture sources resolve to non-executing descriptions rather than being
+    looked up or run — used by ``explain`` so it never executes captures or
+    reveals secrets. Serialization and output templating happen in
     :func:`compose_output`, not here. No document-type knowledge lives here.
     """
-    raise NotImplementedError
+    inventory = load_inventory(inventory_path)
+    resolved = resolve_target(inventory, target_name, cli_variables=cli_variables)
+
+    store = load_secret_store(secrets_path) if secrets_path is not None else SecretStore()
+    variables = sources.resolve_variables(
+        resolved.variables,
+        secrets=store,
+        runner=runner,
+        target=target_name,
+        redact=redact_sources,
+    )
+
+    doc: dict[str, YamlValue] = {}
+    tracker = ProvenanceTracker()
+
+    for ref in resolved.fragments:
+        fragment = fragments_mod.load_fragment(fragments_dir, ref)
+
+        for required_var in fragment.required_variables:
+            if required_var not in variables:
+                raise TemplateRenderError(
+                    f"{target_name}: fragment {fragment.name}: missing required "
+                    f"variable {required_var!r}"
+                )
+
+        for index, op in enumerate(fragment.operations):
+            rendered_value = templating.render_value(
+                op.value,
+                variables,
+                target=target_name,
+                fragment=fragment.name,
+                operation_index=index,
+            )
+            rendered_assertion = {
+                key: templating.render_value(
+                    value,
+                    variables,
+                    target=target_name,
+                    fragment=fragment.name,
+                    operation_index=index,
+                )
+                for key, value in op.assertion.items()
+            }
+            rendered_op = replace(op, value=rendered_value, assertion=rendered_assertion)
+            entry = ProvenanceEntry(
+                fragment=fragment.name, operation_index=index, operation=op.op
+            )
+            merge.apply_operation(doc, rendered_op, entry=entry, tracker=tracker)
+
+    if validate:
+        validation.check_unresolved_markers(doc)
+        if config.output.schema:
+            validation.validate_against_schema(doc, Path(config.output.schema))
+
+    return RenderResult(
+        target=target_name,
+        document=doc,
+        provenance=tracker.entries,
+        overrides=tuple(tracker.overrides),
+    )
 
 
 def compose_output(result: RenderResult, output: OutputSpec) -> str:
@@ -73,7 +148,15 @@ def compose_output(result: RenderResult, output: OutputSpec) -> str:
     YAML; otherwise use the serialized YAML verbatim. This is how a project adds
     a header such as ``#cloud-config``. Ends with a single trailing newline.
     """
-    raise NotImplementedError
+    text = yamlio.dump_str(result.document)
+
+    if output.template:
+        template_text = Path(output.template).read_text(encoding="utf-8")
+        composed = template_text.replace(DOCUMENT_TOKEN, text)
+    else:
+        composed = text
+
+    return composed.rstrip("\n") + "\n"
 
 
 def write_output(text: str, path: Path) -> Path:
@@ -84,15 +167,41 @@ def write_output(text: str, path: Path) -> Path:
     partial final file (PLAN.md "Render all targets"). Return ``path``. Only the
     configured output file is written — no companion files are forced.
     """
-    raise NotImplementedError
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    fd, tmp_name = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp_name, path)
+    except BaseException:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+        raise
+    return path
 
 
 def redact_variables(variables: Variables, *, show_secrets: bool = False) -> Variables:
     """Return a copy of ``variables`` with secret-looking values redacted.
 
-    A variable is redacted when its name contains any of
-    :data:`REDACT_SUBSTRINGS` (case-insensitive), replacing the value with
-    ``"<redacted>"``. When ``show_secrets`` is True, return values unchanged.
-    Used by the ``inspect`` command (PLAN.md "Show resolved inputs").
+    Operates on the UNRESOLVED variables so captures are never executed. A
+    variable defined via a ``from: secret``/``from: capture`` source is always
+    shown as a non-executing description (see :func:`sources.describe_source`),
+    regardless of ``show_secrets``. Otherwise, a variable is redacted when its
+    name contains any of :data:`REDACT_SUBSTRINGS` (case-insensitive) and
+    ``show_secrets`` is False. Used by the ``inspect`` command (PLAN.md "Show
+    resolved inputs").
     """
-    raise NotImplementedError
+    redacted: Variables = {}
+    for name, value in variables.items():
+        if sources.is_source(value):
+            redacted[name] = sources.describe_source(value)
+        elif not show_secrets and any(
+            substring in name.lower() for substring in REDACT_SUBSTRINGS
+        ):
+            redacted[name] = "<redacted>"
+        else:
+            redacted[name] = value
+    return redacted

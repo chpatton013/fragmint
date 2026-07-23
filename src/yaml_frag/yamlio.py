@@ -29,9 +29,32 @@ acceptable if the determinism requirements are met.
 
 from __future__ import annotations
 
+import io
 from pathlib import Path
+from typing import Any
 
+from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
+from ruamel.yaml.scalarstring import LiteralScalarString
+
+from .errors import YamlFragError
 from .models import YamlValue
+
+_load_yaml = YAML(typ="safe")
+_load_yaml.allow_duplicate_keys = False
+
+
+def _normalize(node: Any) -> YamlValue:
+    """Recursively convert ruamel/plain containers into plain dict/list/scalars."""
+    if isinstance(node, dict):
+        return {str(key): _normalize(value) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_normalize(item) for item in node]
+    if node is None or isinstance(node, (bool, int, float, str)):
+        return node
+    # Fallback: coerce unexpected scalar-ish types (e.g. ruamel's own str
+    # subclasses) to plain str.
+    return str(node)
 
 
 def load_file(path: Path) -> YamlValue:
@@ -41,7 +64,27 @@ def load_file(path: Path) -> YamlValue:
     applicable subclass at the call site) on parse failure, with the file path
     included in the message.
     """
-    raise NotImplementedError
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise YamlFragError(f"cannot read YAML file {path}: {exc}") from exc
+    try:
+        data = _load_yaml.load(text)
+    except YAMLError as exc:
+        raise YamlFragError(f"invalid YAML in {path}: {exc}") from exc
+    return _normalize(data)
+
+
+def _to_dumpable(node: YamlValue) -> Any:
+    """Convert plain YamlValue into ruamel-friendly structures, preferring
+    block literal scalars for multiline strings."""
+    if isinstance(node, dict):
+        return {key: _to_dumpable(value) for key, value in node.items()}
+    if isinstance(node, list):
+        return [_to_dumpable(item) for item in node]
+    if isinstance(node, str) and "\n" in node:
+        return LiteralScalarString(node)
+    return node
 
 
 def dump_str(document: YamlValue) -> str:
@@ -50,4 +93,17 @@ def dump_str(document: YamlValue) -> str:
     Does NOT include any output-template header. Must satisfy every requirement
     in the module docstring. Ends with a single trailing newline.
     """
-    raise NotImplementedError
+    yaml = YAML()
+    yaml.default_flow_style = False
+    # mapping=2 gives two-space indentation; sequence=4/offset=2 gives list
+    # items indented two spaces under their key ("key:\n  - item"), matching
+    # PLAN.md's examples. ruamel preserves plain-dict insertion order by
+    # default (no key sorting), satisfying the "do not sort keys" rule.
+    yaml.indent(mapping=2, sequence=4, offset=2)
+    yaml.width = 2**31 - 1
+    yaml.allow_unicode = True
+
+    stream = io.StringIO()
+    yaml.dump(_to_dumpable(document), stream)
+    text = stream.getvalue()
+    return text.rstrip("\n") + "\n"

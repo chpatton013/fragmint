@@ -1,0 +1,49 @@
+#cloud-config
+autoinstall:
+  version: 1
+  keyboard:
+    layout: us
+  locale: en_US.UTF-8
+  user-data:
+    package_update: true
+    package_upgrade: false
+    write_files:
+      - path: /etc/sudoers.d/90-chris-nopasswd
+        owner: root:root
+        permissions: '0440'
+        content: |
+          chris ALL=(ALL:ALL) NOPASSWD:ALL
+    runcmd:
+      - visudo --check --file="/etc/sudoers.d/90-chris-nopasswd"
+    packages:
+      - bind9-dnsutils
+      - ca-certificates
+      - curl
+      - iputils-ping
+      - vim-tiny
+  identity:
+    hostname: gb10-02
+    username: chris
+    password: $6$stubsalt$stubhash
+  ssh:
+    install-server: true
+    allow-pw: false
+    import-id:
+      - gh:chpatton013
+  source:
+    id: ubuntu-server-minimal
+    search_drivers: false
+  kernel:
+    package: linux-generic-hwe-24.04
+  storage:
+    layout:
+      name: lvm
+      sizing-policy: all
+  network:
+    version: 2
+    ethernets:
+      primary:
+        match:
+          name: enP7s7
+        dhcp4: true
+        dhcp6: false

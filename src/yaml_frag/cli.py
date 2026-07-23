@@ -16,13 +16,22 @@ Output discipline (PLAN.md): rendered output goes to STDOUT only for
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
+from typing import cast
 
 import click
 
+from . import config as config_mod
+from . import inventory as inventory_mod
+from . import pointer as pointer_mod
+from . import render as render_mod
+from . import validation as validation_mod
+from . import yamlio
 from .config import DEFAULT_CONFIG_PATH
-from .errors import YamlFragError
+from .errors import ConfigError, YamlFragError
 from .exit_codes import ExitCode
+from .models import ProjectConfig, Variables, YamlValue
 
 
 def _parse_var(ctx: click.Context, param: click.Parameter, values: tuple[str, ...]) -> dict[str, str]:
@@ -32,7 +41,44 @@ def _parse_var(ctx: click.Context, param: click.Parameter, values: tuple[str, ..
     missing the ``=`` separator. Values are strings here; type coercion happens
     during templating (PLAN.md "Template rendering": typed values).
     """
-    raise NotImplementedError
+    result: dict[str, str] = {}
+    for raw in values:
+        if "=" not in raw:
+            raise click.BadParameter(
+                f"expected KEY=VALUE, got {raw!r}", ctx=ctx, param=param
+            )
+        key, _, value = raw.partition("=")
+        result[key] = value
+    return result
+
+
+def _resolve_inputs(
+    config: ProjectConfig,
+    inventory_path: Path | None,
+    fragments_dir: Path | None,
+) -> tuple[Path, Path]:
+    """Apply CLI overrides over the project-config defaults for inventory
+    and fragments-dir locations (PLAN.md "Command-line interface")."""
+    resolved_inventory = inventory_path if inventory_path is not None else Path(config.inventory)
+    resolved_fragments = fragments_dir if fragments_dir is not None else Path(config.fragments_dir)
+    return resolved_inventory, resolved_fragments
+
+
+def _emit_overrides(overrides: tuple[str, ...], *, quiet: bool) -> None:
+    if quiet:
+        return
+    for warning in overrides:
+        click.echo(warning, err=True)
+
+
+def _run_selected_validators(
+    config: ProjectConfig,
+    output_path: Path,
+    requested: tuple[str, ...],
+) -> None:
+    for name in config_mod.select_validators(config, requested):
+        spec = config.validators[name]
+        validation_mod.run_validator(output_path, spec.command)
 
 
 # Shared option decorators. Path defaults are None so the resolved value comes
@@ -117,7 +163,34 @@ def render(
     validate: bool,
 ) -> None:
     """Render one TARGET to its configured output path."""
-    raise NotImplementedError
+    cfg = config_mod.load_config(config_path)
+    inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
+
+    result = render_mod.render_target(
+        target,
+        config=cfg,
+        inventory_path=inv_path,
+        fragments_dir=frags_dir,
+        cli_variables=cast(Variables, cli_variables),
+        secrets_path=secrets_path,
+        validate=validate,
+    )
+    _emit_overrides(result.overrides, quiet=quiet_overrides)
+
+    text = render_mod.compose_output(result, cfg.output)
+
+    if to_stdout:
+        click.echo(text, nl=False)
+        return
+
+    if dry_run:
+        return
+
+    out_path = config_mod.resolve_output_path(cfg, target, override=output_path)
+    render_mod.write_output(text, out_path)
+
+    if validate:
+        _run_selected_validators(cfg, out_path, validators)
 
 
 @cli.command("render-all")
@@ -142,7 +215,35 @@ def render_all(
     Do not leave a partial final output file for a failed target (atomic
     writes; PLAN.md "Render all targets").
     """
-    raise NotImplementedError
+    cfg = config_mod.load_config(config_path)
+    inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
+    inv = inventory_mod.load_inventory(inv_path)
+
+    failed: list[str] = []
+    for target_name in inv.targets:
+        try:
+            result = render_mod.render_target(
+                target_name,
+                config=cfg,
+                inventory_path=inv_path,
+                fragments_dir=frags_dir,
+                secrets_path=secrets_path,
+                validate=validate,
+            )
+            _emit_overrides(result.overrides, quiet=quiet_overrides)
+            text = render_mod.compose_output(result, cfg.output)
+            out_path = config_mod.resolve_output_path(cfg, target_name)
+            render_mod.write_output(text, out_path)
+            if validate:
+                _run_selected_validators(cfg, out_path, validators)
+        except YamlFragError as exc:
+            click.echo(f"{target_name}: {exc}", err=True)
+            failed.append(target_name)
+
+    if failed:
+        raise YamlFragError(
+            f"render-all: {len(failed)} target(s) failed: {', '.join(failed)}"
+        )
 
 
 @cli.command()
@@ -163,7 +264,28 @@ def validate(
     validators: tuple[str, ...],
 ) -> None:
     """Render TARGET in memory and validate without writing output."""
-    raise NotImplementedError
+    cfg = config_mod.load_config(config_path)
+    inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
+
+    result = render_mod.render_target(
+        target,
+        config=cfg,
+        inventory_path=inv_path,
+        fragments_dir=frags_dir,
+        cli_variables=cast(Variables, cli_variables),
+        secrets_path=secrets_path,
+        validate=True,
+    )
+    text = render_mod.compose_output(result, cfg.output)
+
+    selected = config_mod.select_validators(cfg, validators)
+    if selected:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_path = Path(tmp_dir) / "output"
+            render_mod.write_output(text, tmp_path)
+            for name in selected:
+                spec = cfg.validators[name]
+                validation_mod.run_validator(tmp_path, spec.command)
 
 
 @cli.command("validate-all")
@@ -180,7 +302,38 @@ def validate_all(
     validators: tuple[str, ...],
 ) -> None:
     """Validate every target in inventory order; nonzero if any fails."""
-    raise NotImplementedError
+    cfg = config_mod.load_config(config_path)
+    inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
+    inv = inventory_mod.load_inventory(inv_path)
+
+    failed: list[str] = []
+    for target_name in inv.targets:
+        try:
+            result = render_mod.render_target(
+                target_name,
+                config=cfg,
+                inventory_path=inv_path,
+                fragments_dir=frags_dir,
+                secrets_path=secrets_path,
+                validate=True,
+            )
+            text = render_mod.compose_output(result, cfg.output)
+            selected = config_mod.select_validators(cfg, validators)
+            if selected:
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    tmp_path = Path(tmp_dir) / "output"
+                    render_mod.write_output(text, tmp_path)
+                    for name in selected:
+                        spec = cfg.validators[name]
+                        validation_mod.run_validator(tmp_path, spec.command)
+        except YamlFragError as exc:
+            click.echo(f"{target_name}: {exc}", err=True)
+            failed.append(target_name)
+
+    if failed:
+        raise YamlFragError(
+            f"validate-all: {len(failed)} target(s) failed: {', '.join(failed)}"
+        )
 
 
 @cli.command()
@@ -204,7 +357,46 @@ def explain(
 
     See PLAN.md "Provenance tracking" for the expected output format.
     """
-    raise NotImplementedError
+    cfg = config_mod.load_config(config_path)
+    inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
+
+    # Redact sources so explain never executes captures or reveals secrets
+    # (PLAN.md "Resolution timing"); secret/capture-derived values appear as
+    # non-executing placeholders in the provenance output.
+    result = render_mod.render_target(
+        target,
+        config=cfg,
+        inventory_path=inv_path,
+        fragments_dir=frags_dir,
+        cli_variables=cast(Variables, cli_variables),
+        secrets_path=secrets_path,
+        validate=False,
+        redact_sources=True,
+    )
+
+    def _in_scope(doc_path: str) -> bool:
+        if path is None:
+            return True
+        return doc_path == path or doc_path.startswith(path.rstrip("/") + "/")
+
+    blocks: list[str] = []
+    for doc_path in sorted(result.provenance):
+        if not _in_scope(doc_path):
+            continue
+        entries = result.provenance[doc_path]
+        _, value = pointer_mod.get(result.document, doc_path)
+        lines = [doc_path]
+        if isinstance(value, list):
+            lines.append("  contributors:")
+            for entry in entries:
+                lines.append(f"    - {entry.fragment} operation {entry.operation_index}")
+        else:
+            last = entries[-1]
+            lines.append(f"  value: {value}")
+            lines.append(f"  source: {last.fragment} operation {last.operation_index}")
+        blocks.append("\n".join(lines))
+
+    click.echo("\n\n".join(blocks))
 
 
 @cli.command("list")
@@ -214,7 +406,27 @@ def explain(
 @_fragments_option
 def list_(kind: str, config_path: Path, inventory_path: Path | None, fragments_dir: Path | None) -> None:
     """List ``targets``, ``fragments``, or ``groups``."""
-    raise NotImplementedError
+    cfg = config_mod.load_config(config_path)
+    inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
+
+    if kind == "fragments":
+        if not frags_dir.is_dir():
+            raise ConfigError(f"fragments directory not found: {frags_dir}")
+        names = sorted(
+            str(p.relative_to(frags_dir).with_suffix("")).replace("\\", "/")
+            for p in frags_dir.rglob("*.yaml")
+        )
+        for name in names:
+            click.echo(name)
+        return
+
+    inv = inventory_mod.load_inventory(inv_path)
+    if kind == "targets":
+        for name in inv.targets:
+            click.echo(name)
+    elif kind == "groups":
+        for name in inv.groups:
+            click.echo(name)
 
 
 @cli.command()
@@ -238,7 +450,21 @@ def inspect(
 
     See PLAN.md "Show resolved inputs".
     """
-    raise NotImplementedError
+    cfg = config_mod.load_config(config_path)
+    inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
+    inv = inventory_mod.load_inventory(inv_path)
+    resolved = inventory_mod.resolve_target(inv, target, cli_variables=cast(Variables, cli_variables))
+
+    redacted_variables: Variables = render_mod.redact_variables(
+        resolved.variables, show_secrets=show_secrets
+    )
+    output_doc: dict[str, YamlValue] = {
+        "target": resolved.name,
+        "groups": list(resolved.groups),
+        "fragments": list(resolved.fragments),
+        "variables": cast(YamlValue, redacted_variables),
+    }
+    click.echo(yamlio.dump_str(output_doc), nl=False)
 
 
 def main(argv: list[str] | None = None) -> int:

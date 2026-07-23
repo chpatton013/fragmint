@@ -17,7 +17,13 @@ unit-tested in isolation (PLAN.md "Unit tests": "JSON Pointer escaping").
 
 from __future__ import annotations
 
+from .errors import MergeConflictError, YamlFragError
 from .models import YamlValue
+
+
+def _decode_token(token: str) -> str:
+    # RFC 6901: decode "~1" -> "/" before "~0" -> "~".
+    return token.replace("~1", "/").replace("~0", "~")
 
 
 def parse_pointer(pointer: str) -> tuple[str, ...]:
@@ -29,7 +35,13 @@ def parse_pointer(pointer: str) -> tuple[str, ...]:
     Raise :class:`~yaml_frag.errors.YamlFragError` (or a suitable
     subclass) if the pointer does not start with ``/`` and is not empty.
     """
-    raise NotImplementedError
+    if pointer in ("", "/"):
+        return ()
+    if not pointer.startswith("/"):
+        raise YamlFragError(
+            f"invalid JSON Pointer {pointer!r}: must start with '/' or be empty"
+        )
+    return tuple(_decode_token(token) for token in pointer[1:].split("/"))
 
 
 def get(document: YamlValue, pointer: str) -> tuple[bool, YamlValue]:
@@ -41,7 +53,13 @@ def get(document: YamlValue, pointer: str) -> tuple[bool, YamlValue]:
     the caller needs to descend through it (decide and document the exact
     behavior when implementing; be conservative).
     """
-    raise NotImplementedError
+    tokens = parse_pointer(pointer)
+    node: YamlValue = document
+    for token in tokens:
+        if not isinstance(node, dict) or token not in node:
+            return False, None
+        node = node[token]
+    return True, node
 
 
 def set_(document: dict[str, YamlValue], pointer: str, value: YamlValue) -> None:
@@ -51,7 +69,32 @@ def set_(document: dict[str, YamlValue], pointer: str, value: YamlValue) -> None
     (PLAN.md "set"). If an existing intermediate node is a non-mapping,
     raise :class:`~yaml_frag.errors.MergeConflictError`.
     """
-    raise NotImplementedError
+    tokens = parse_pointer(pointer)
+    if not tokens:
+        if not isinstance(value, dict):
+            raise MergeConflictError(
+                f"cannot set root document to non-mapping value "
+                f"(got {type(value).__name__})"
+            )
+        document.clear()
+        document.update(value)
+        return
+
+    node: dict[str, YamlValue] = document
+    for token in tokens[:-1]:
+        child = node.get(token)
+        if token not in node:
+            new_child: dict[str, YamlValue] = {}
+            node[token] = new_child
+            node = new_child
+        elif isinstance(child, dict):
+            node = child
+        else:
+            raise MergeConflictError(
+                f"cannot set {pointer}: intermediate path segment "
+                f"{token!r} is not a mapping (found {type(child).__name__})"
+            )
+    node[tokens[-1]] = value
 
 
 def delete(document: dict[str, YamlValue], pointer: str, *, missing_ok: bool) -> bool:
@@ -62,4 +105,24 @@ def delete(document: dict[str, YamlValue], pointer: str, *, missing_ok: bool) ->
     :class:`~yaml_frag.errors.YamlFragError`; if ``True``, return
     ``False``. Used by the ``remove`` operation (PLAN.md "remove").
     """
-    raise NotImplementedError
+    tokens = parse_pointer(pointer)
+    if not tokens:
+        # Removing the root clears the whole document.
+        document.clear()
+        return True
+
+    node: YamlValue = document
+    for token in tokens[:-1]:
+        if not isinstance(node, dict) or token not in node:
+            if missing_ok:
+                return False
+            raise YamlFragError(f"cannot remove {pointer}: path does not exist")
+        node = node[token]
+
+    last = tokens[-1]
+    if not isinstance(node, dict) or last not in node:
+        if missing_ok:
+            return False
+        raise YamlFragError(f"cannot remove {pointer}: path does not exist")
+    del node[last]
+    return True

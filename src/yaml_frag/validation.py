@@ -17,15 +17,29 @@ failed:
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
+from typing import Any
 
+import jsonschema
+
+from .errors import ValidationError
 from .models import YamlValue
+from .yamlio import load_file
 
 #: Names of the JSON schema files under ``schemas/`` used for INPUT validation.
 INVENTORY_SCHEMA = "inventory.schema.json"
 FRAGMENT_SCHEMA = "fragment.schema.json"
 PROJECT_SCHEMA = "project.schema.json"
 SECRETS_SCHEMA = "secrets.schema.json"
+
+#: Bounded timeout (seconds) for an external validator subprocess.
+VALIDATOR_TIMEOUT = 60.0
+
+
+def _schema_path(name: str) -> Path:
+    """Resolve a project-shipped tool-format schema under ``<repo>/schemas/``."""
+    return Path(__file__).resolve().parents[2] / "schemas" / name
 
 
 def check_unresolved_markers(document: YamlValue) -> None:
@@ -37,7 +51,21 @@ def check_unresolved_markers(document: YamlValue) -> None:
     one universal, document-agnostic structural check. See PLAN.md "Generic
     rendered-document validation".
     """
-    raise NotImplementedError
+
+    def _walk(node: YamlValue, path: str) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                _walk(value, f"{path}/{key}")
+        elif isinstance(node, list):
+            for index, item in enumerate(node):
+                _walk(item, f"{path}/{index}")
+        elif isinstance(node, str):
+            if "{{" in node or "{%" in node:
+                raise ValidationError(
+                    f"unresolved template marker at {path or '/'}: {node!r}"
+                )
+
+    _walk(document, "")
 
 
 def validate_against_schema(document: YamlValue, schema_path: Path) -> None:
@@ -48,7 +76,17 @@ def validate_against_schema(document: YamlValue, schema_path: Path) -> None:
     message) on any schema violation. The renderer ships no default document
     schema; this is entirely project-driven.
     """
-    raise NotImplementedError
+    if not schema_path.is_file():
+        raise ValidationError(f"document schema not found: {schema_path}")
+
+    schema: dict[str, Any] = load_file(schema_path)  # type: ignore[assignment]
+    try:
+        jsonschema.validate(instance=document, schema=schema)
+    except jsonschema.ValidationError as exc:
+        raise ValidationError(
+            f"rendered document failed schema validation against {schema_path}: "
+            f"{exc.message} (at {'/'.join(str(part) for part in exc.path)})"
+        ) from exc
 
 
 def run_validator(output_path: Path, command: tuple[str, ...]) -> None:
@@ -60,4 +98,25 @@ def run_validator(output_path: Path, command: tuple[str, ...]) -> None:
     :class:`~yaml_frag.errors.ValidationError` on nonzero exit, including
     captured stdout/stderr. Selected via ``--validator NAME``.
     """
-    raise NotImplementedError
+    argv = [*command, str(output_path)]
+    try:
+        completed = subprocess.run(  # noqa: S603 - argv list, shell=False by design
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=VALIDATOR_TIMEOUT,
+            shell=False,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise ValidationError(f"validator command not found: {argv[0]!r}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ValidationError(
+            f"validator command {argv[0]!r} timed out after {VALIDATOR_TIMEOUT}s"
+        ) from exc
+
+    if completed.returncode != 0:
+        raise ValidationError(
+            f"validator {argv[0]!r} failed with exit {completed.returncode}\n"
+            f"stdout:\n{completed.stdout}\nstderr:\n{completed.stderr}"
+        )

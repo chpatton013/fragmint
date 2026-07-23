@@ -45,9 +45,11 @@ from __future__ import annotations
 import subprocess
 from typing import Protocol, Sequence
 
-from .errors import CaptureError
+from .errors import CaptureError, ConfigError, SecretNotFoundError
 from .models import (
     CaptureSource,
+    LiteralSource,
+    SecretSource,
     SecretStore,
     Variables,
     VariableSource,
@@ -110,7 +112,10 @@ def is_source(raw: YamlValue) -> bool:
     True only when ``raw`` is a mapping whose :data:`DISCRIMINATOR` value is in
     :data:`SOURCE_KINDS`. Everything else is a literal.
     """
-    raise NotImplementedError
+    if not isinstance(raw, dict):
+        return False
+    kind = raw.get(DISCRIMINATOR)
+    return isinstance(kind, str) and kind in SOURCE_KINDS
 
 
 def parse_source(raw: YamlValue) -> VariableSource:
@@ -123,7 +128,56 @@ def parse_source(raw: YamlValue) -> VariableSource:
     :class:`~errors.ConfigError` for a structurally invalid source) with the
     offending shape described.
     """
-    raise NotImplementedError
+    if not is_source(raw):
+        return LiteralSource(value=raw)
+    assert isinstance(raw, dict)
+    kind = raw[DISCRIMINATOR]
+
+    if kind == "literal":
+        if "value" not in raw:
+            raise ConfigError("invalid `from: literal` source: missing `value` field")
+        return LiteralSource(value=raw["value"])
+
+    if kind == "secret":
+        name = raw.get("name")
+        if not isinstance(name, str) or not name:
+            raise ConfigError("invalid `from: secret` source: missing or empty `name` field")
+        return SecretSource(name=name)
+
+    if kind == "capture":
+        command_raw = raw.get("command")
+        if not isinstance(command_raw, list) or not command_raw:
+            raise ConfigError(
+                "invalid `from: capture` source: `command` must be a non-empty list"
+            )
+        command = tuple(parse_source(item) for item in command_raw)
+        stdin_raw = raw.get("stdin")
+        stdin = parse_source(stdin_raw) if stdin_raw is not None else None
+        trim_raw = raw.get("trim", True)
+        if not isinstance(trim_raw, bool):
+            raise ConfigError("invalid `from: capture` source: `trim` must be a boolean")
+        return CaptureSource(command=command, stdin=stdin, trim=trim_raw)
+
+    raise ConfigError(f"invalid variable source: unrecognized `from` value {kind!r}")
+
+
+def _is_sensitive(source: VariableSource) -> bool:
+    return isinstance(source, (SecretSource, CaptureSource))
+
+
+def _redact_source_for_error(source: VariableSource) -> str:
+    """Render a source for inclusion in a description/error, redacting anything
+    secret-derived. Literal values are rendered as plain text (not Python
+    repr) so a command's literal arguments read naturally, e.g.
+    ``<capture: openssl passwd -6 -stdin>``."""
+    if isinstance(source, LiteralSource):
+        return str(source.value)
+    if isinstance(source, SecretSource):
+        return f"<secret {source.name}>"
+    if isinstance(source, CaptureSource):
+        parts = [_redact_source_for_error(part) for part in source.command]
+        return f"<capture: {' '.join(parts)}>"
+    return "<unknown>"
 
 
 def resolve_source(
@@ -134,6 +188,7 @@ def resolve_source(
     target: str,
     variable: str,
     timeout: float = DEFAULT_CAPTURE_TIMEOUT,
+    redact: bool = False,
 ) -> YamlValue:
     """Resolve a single source to a concrete value.
 
@@ -145,9 +200,69 @@ def resolve_source(
       strings) and ``stdin``, run via ``runner``, then strip one trailing
       newline when ``trim``. Raise :class:`~errors.CaptureError` on failure.
 
+    When ``redact`` is true, a ``SecretSource``/``CaptureSource`` resolves to
+    its non-executing description (``<secret NAME>`` / ``<capture: ...>``)
+    WITHOUT looking up the secret store or running any subprocess. This is what
+    ``explain`` uses so it can build the document for provenance without
+    executing captures or revealing secrets (PLAN.md "Resolution timing").
+
     Never log resolved secret values or secret-sourced arguments.
     """
-    raise NotImplementedError
+    if redact and isinstance(source, (SecretSource, CaptureSource)):
+        return _redact_source_for_error(source)
+
+    if isinstance(source, LiteralSource):
+        return source.value
+
+    if isinstance(source, SecretSource):
+        if source.name not in secrets.secrets:
+            raise SecretNotFoundError(
+                f"target {target!r}: variable {variable!r}: "
+                f"secret {source.name!r} not found in secret store"
+            )
+        return secrets.secrets[source.name]
+
+    if isinstance(source, CaptureSource):
+        argv: list[str] = []
+        for element in source.command:
+            resolved = resolve_source(
+                element,
+                secrets=secrets,
+                runner=runner,
+                target=target,
+                variable=variable,
+                timeout=timeout,
+            )
+            argv.append(str(resolved))
+
+        stdin_text: str | None = None
+        if source.stdin is not None:
+            resolved_stdin = resolve_source(
+                source.stdin,
+                secrets=secrets,
+                runner=runner,
+                target=target,
+                variable=variable,
+                timeout=timeout,
+            )
+            stdin_text = str(resolved_stdin)
+
+        command_name = argv[0] if argv else "<empty command>"
+        try:
+            stdout = runner.run(argv, stdin=stdin_text, timeout=timeout)
+        except CaptureError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - surface as CaptureError, no raw args
+            raise CaptureError(
+                f"target {target!r}: variable {variable!r}: "
+                f"capture command {command_name!r} failed: {exc}"
+            ) from exc
+
+        if source.trim and stdout.endswith("\n"):
+            stdout = stdout[:-1]
+        return stdout
+
+    raise ConfigError(f"unrecognized variable source: {source!r}")
 
 
 def resolve_variables(
@@ -157,6 +272,7 @@ def resolve_variables(
     runner: CommandRunner | None = None,
     target: str,
     timeout: float = DEFAULT_CAPTURE_TIMEOUT,
+    redact: bool = False,
 ) -> Variables:
     """Resolve every variable in a layered map to concrete values.
 
@@ -164,8 +280,24 @@ def resolve_variables(
     :func:`resolve_source`. ``runner`` defaults to :class:`DefaultCommandRunner`.
     Returns a new mapping of concrete values suitable for templating. Called by
     :mod:`render` once, after inventory resolution.
+
+    When ``redact`` is true, secret/capture sources resolve to non-executing
+    descriptions (no store lookup, no subprocess) — used by ``explain``.
     """
-    raise NotImplementedError
+    active_runner = runner if runner is not None else DefaultCommandRunner()
+    resolved: Variables = {}
+    for name, value in raw.items():
+        source = parse_source(value)
+        resolved[name] = resolve_source(
+            source,
+            secrets=secrets,
+            runner=active_runner,
+            target=target,
+            variable=name,
+            timeout=timeout,
+            redact=redact,
+        )
+    return resolved
 
 
 def describe_source(raw: YamlValue) -> str:
@@ -177,4 +309,12 @@ def describe_source(raw: YamlValue) -> str:
     normal (name-based) redaction path instead. See PLAN.md "Show resolved
     inputs".
     """
-    raise NotImplementedError
+    source = parse_source(raw)
+    if isinstance(source, SecretSource):
+        return f"<secret {source.name}>"
+    if isinstance(source, CaptureSource):
+        parts = [_redact_source_for_error(part) for part in source.command]
+        return f"<capture: {' '.join(parts)}>"
+    if isinstance(source, LiteralSource):
+        return repr(source.value)
+    return "<unknown>"
