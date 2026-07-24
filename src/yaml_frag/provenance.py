@@ -6,8 +6,11 @@ The tracker records which fragment/operation last modified each document path,
 and accumulates per-path contributor history so ``explain`` can show where a
 final value came from and which fragments contributed to a list.
 
-It also produces the override warnings emitted when a ``set`` replaces an
-existing value (warnings on by default, suppressible via ``--quiet-overrides``).
+It also produces the override warnings emitted when a ``set`` (or a
+``merge``'s scalar replacement) replaces an existing value. Warnings are on
+by default, suppressible globally via ``--quiet-overrides`` or per-operation
+via the fragment's own ``overwrite_ok: true`` (see README.md "Conflict
+reporting").
 """
 
 from __future__ import annotations
@@ -22,8 +25,9 @@ class ProvenanceTracker:
     - Keep an ordered map ``path -> list[ProvenanceEntry]`` (most recent last).
     - ``record`` is called by :mod:`merge` after each path mutation.
     - ``overrides`` collects human-readable warning strings for ``set``
-      operations that replaced an existing value, formatted per README.md
-      "Conflict reporting" (previous source vs new source).
+      operations (and ``merge`` scalar replacements) that replaced an
+      existing value, formatted per README.md "Conflict reporting" (previous
+      source vs new source). Suppressed per-call when ``overwrite_ok`` is set.
     """
 
     def __init__(self) -> None:
@@ -36,14 +40,18 @@ class ProvenanceTracker:
         entry: ProvenanceEntry,
         *,
         replaced_existing: bool,
+        overwrite_ok: bool = False,
     ) -> None:
         """Record that ``entry`` modified ``path``.
 
         When ``replaced_existing`` is true and a prior entry exists for the
-        path, append a formatted override warning to :attr:`overrides`.
+        path, append a formatted override warning to :attr:`overrides` —
+        unless ``overwrite_ok`` is set, in which case the replacement is
+        recorded (provenance/``explain`` still show it) but no warning is
+        raised.
         """
         history = self.entries.setdefault(path, [])
-        if replaced_existing and history:
+        if replaced_existing and history and not overwrite_ok:
             previous = history[-1]
             self.overrides.append(
                 f"warning: {entry.fragment} operation {entry.operation_index} "

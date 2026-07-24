@@ -109,6 +109,7 @@ def _parse_operation(name: str, index: int, raw: dict[str, Any]) -> FragmentOper
         value=raw.get("value"),
         deduplicate=bool(raw.get("deduplicate", False)),
         missing_ok=bool(raw.get("missing_ok", False)),
+        overwrite_ok=bool(raw.get("overwrite_ok", False)),
         assertion=assertion,
     )
 

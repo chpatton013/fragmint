@@ -55,6 +55,7 @@
         "value": {},
         "deduplicate": { "type": "boolean" },
         "missing_ok": { "type": "boolean" },
+        "overwrite_ok": { "type": "boolean" },
         "equals": {},
         "exists": { "type": "boolean" },
         "type": {

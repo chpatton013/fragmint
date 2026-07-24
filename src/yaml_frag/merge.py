@@ -10,12 +10,14 @@ in "Merge examples". Do NOT implement any implicit/"smart" merge behavior
 (README.md "Design principles"). Summary of the contract:
 
 - ``set``: replace value at path, creating missing parent mappings; replacing
-  an existing value is allowed and emits an override warning.
+  an existing value is allowed and emits an override warning, unless the
+  operation sets ``overwrite_ok: true`` to declare the replacement intentional.
 - ``merge``: recursively merge a mapping into a mapping. Both target and
   incoming must be mappings. Nested mappings merge recursively; scalars are
-  replaced; lists are NOT implicitly merged — if a list exists at a path and
-  the incoming mapping has a list at the same path, FAIL unless identical.
-  Incompatible types (e.g. mapping into list) raise MergeConflictError.
+  replaced (also subject to ``overwrite_ok`` as above); lists are NOT
+  implicitly merged — if a list exists at a path and the incoming mapping has
+  a list at the same path, FAIL unless identical. Incompatible types (e.g.
+  mapping into list) raise MergeConflictError.
 - ``append`` / ``prepend``: value must be a list; create the target list if
   absent; fail if the existing target is not a list; preserve order; do not
   deduplicate unless ``deduplicate`` is set (keep first occurrence; structural
@@ -134,7 +136,12 @@ def apply_set(
     """Apply a ``set`` operation. See README.md "Merge operations" (`set`)."""
     existed, _ = pointer.get(document, operation.path)
     pointer.set_(document, operation.path, operation.value)
-    tracker.record(operation.path, entry, replaced_existing=existed)
+    tracker.record(
+        operation.path,
+        entry,
+        replaced_existing=existed,
+        overwrite_ok=operation.overwrite_ok,
+    )
 
 
 def _merge_recursive(
@@ -144,6 +151,7 @@ def _merge_recursive(
     path: str,
     entry: ProvenanceEntry,
     tracker: ProvenanceTracker,
+    overwrite_ok: bool,
 ) -> None:
     for key, incoming_value in incoming.items():
         child_path = _join_path(path, key)
@@ -161,6 +169,7 @@ def _merge_recursive(
                 path=child_path,
                 entry=entry,
                 tracker=tracker,
+                overwrite_ok=overwrite_ok,
             )
             continue
 
@@ -191,7 +200,9 @@ def _merge_recursive(
         # Both scalars (or otherwise compatible non-mapping, non-list
         # values): the incoming value replaces the existing one.
         target[key] = incoming_value
-        tracker.record(child_path, entry, replaced_existing=True)
+        tracker.record(
+            child_path, entry, replaced_existing=True, overwrite_ok=overwrite_ok
+        )
 
 
 def apply_merge(
@@ -224,7 +235,12 @@ def apply_merge(
         )
 
     _merge_recursive(
-        current, operation.value, path=operation.path, entry=entry, tracker=tracker
+        current,
+        operation.value,
+        path=operation.path,
+        entry=entry,
+        tracker=tracker,
+        overwrite_ok=operation.overwrite_ok,
     )
 
 

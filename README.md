@@ -433,13 +433,26 @@ object replacement.
   value: { package: linux-generic-hwe-24.04 }
 ```
 
+Add `overwrite_ok: true` to declare the replacement intentional and suppress
+just that operation's warning (the replacement is still recorded and visible
+via `explain`):
+
+```yaml
+- op: set
+  path: /autoinstall/kernel
+  value: { package: linux-generic-hwe-24.04 }
+  overwrite_ok: true
+```
+
 **`merge`** — recursively merge one mapping into another mapping. Both the
 existing target and incoming value must be mappings; nested mappings merge
-recursively; scalar values are replaced. Lists are **not** implicitly
-merged — if a list already exists at a path and the incoming mapping
-contains a list at the same path, the operation fails unless the list value
-is identical. Fragments that need to modify lists must use `append`,
-`prepend`, `set`, or a removal operation explicitly.
+recursively; scalar values are replaced (also emitting an override warning,
+suppressible the same way with `overwrite_ok: true` on the `merge`
+operation). Lists are **not** implicitly merged — if a list already exists
+at a path and the incoming mapping contains a list at the same path, the
+operation fails unless the list value is identical. Fragments that need to
+modify lists must use `append`, `prepend`, `set`, or a removal operation
+explicitly.
 
 ```yaml
 - op: merge
@@ -517,7 +530,8 @@ Result: `[curl, ca-certificates, qemu-guest-agent]`.
 Replacing a scalar object (earlier: `set /autoinstall/kernel ->
 {package: linux-generic}`; later: `set /autoinstall/kernel -> {package:
 linux-generic-hwe-24.04}`) results in `{package: linux-generic-hwe-24.04}`
-plus an override warning.
+plus an override warning — unless the later operation sets
+`overwrite_ok: true`, in which case the same replacement happens silently.
 
 Two `append` operations to `/autoinstall/user-data/write_files` concatenate
 the entries — the renderer never merges list entries by a key field; to
@@ -602,14 +616,23 @@ yaml-frag explain gb10-01 /autoinstall/storage
 
 ## Conflict reporting
 
-When a `set` replaces an existing value, a warning is emitted by default
-(suppress with `--quiet-overrides`):
+When a `set` (or a `merge`'s scalar replacement) replaces an existing value,
+a warning is emitted by default:
 
 ```text
 warning: hardware/gb10 operation 0 replaced /autoinstall/kernel
   previous source: ubuntu-24.04
   new source: hardware/gb10
 ```
+
+Two ways to suppress it, depending on scope: `--quiet-overrides` silences
+every override warning for the run, useful when iterating; adding
+`overwrite_ok: true` to a specific operation instead declares *that*
+replacement intentional and silences only its warning, leaving others
+visible — prefer this when you know a fragment is meant to replace a
+specific earlier value, so an *unexpected* override elsewhere still
+surfaces. Either way the replacement itself still happens and is still
+visible via `explain`; only the warning is suppressed.
 
 A `merge` encountering an incompatible type fails instead:
 

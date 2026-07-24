@@ -321,6 +321,63 @@ def test_set_override_emits_warning() -> None:
     assert "/autoinstall/kernel" in warning
 
 
+def test_set_overwrite_ok_suppresses_warning() -> None:
+    """`overwrite_ok: true` on `set` replaces the value but emits no warning."""
+    document: dict = {"autoinstall": {"kernel": {"package": "linux-generic"}}}
+    tracker = ProvenanceTracker()
+    entry1 = _entry(fragment="ubuntu-24.04", operation_index=0, op="set")
+    merge.apply_operation(
+        document,
+        FragmentOperation(op="set", path="/autoinstall/kernel", value={"package": "linux-generic"}),
+        entry=entry1,
+        tracker=tracker,
+    )
+
+    entry2 = _entry(fragment="hardware/gb10", operation_index=0, op="set")
+    merge.apply_operation(
+        document,
+        FragmentOperation(
+            op="set",
+            path="/autoinstall/kernel",
+            value={"package": "linux-generic-hwe-24.04"},
+            overwrite_ok=True,
+        ),
+        entry=entry2,
+        tracker=tracker,
+    )
+    assert document["autoinstall"]["kernel"] == {"package": "linux-generic-hwe-24.04"}
+    assert tracker.overrides == []
+    # The replacement is still recorded for provenance/`explain`.
+    last = tracker.last_source("/autoinstall/kernel")
+    assert last is not None
+    assert last.fragment == "hardware/gb10"
+
+
+def test_merge_overwrite_ok_suppresses_scalar_warning() -> None:
+    """`overwrite_ok: true` on `merge` suppresses the scalar-replace warning."""
+    document: dict = {"autoinstall": {"locale": "en_US.UTF-8"}}
+    tracker = ProvenanceTracker()
+    entry1 = _entry(fragment="ubuntu-24.04", operation_index=0, op="merge")
+    merge.apply_operation(
+        document,
+        FragmentOperation(op="merge", path="/autoinstall", value={"locale": "en_US.UTF-8"}),
+        entry=entry1,
+        tracker=tracker,
+    )
+
+    entry2 = _entry(fragment="hardware/gb10", operation_index=0, op="merge")
+    merge.apply_operation(
+        document,
+        FragmentOperation(
+            op="merge", path="/autoinstall", value={"locale": "en_GB.UTF-8"}, overwrite_ok=True
+        ),
+        entry=entry2,
+        tracker=tracker,
+    )
+    assert document["autoinstall"]["locale"] == "en_GB.UTF-8"
+    assert tracker.overrides == []
+
+
 # --- Additional coverage -----------------------------------------------
 
 

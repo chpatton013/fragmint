@@ -138,6 +138,9 @@ class FragmentOperation:
     Optional per-operation fields (only meaningful for some ops):
     - ``deduplicate``: ``append``/``prepend`` — drop duplicates, keep first.
     - ``missing_ok``: ``remove``/``remove-list-items`` — tolerate absence.
+    - ``overwrite_ok``: ``set``/``merge`` — declare that replacing an existing
+      value at this path is intentional, suppressing the per-operation
+      override warning (see README.md "Conflict reporting").
     - ``assertion``: for ``assert``, the parsed assertion clause
       (e.g. ``{"equals": 1}``, ``{"exists": True}``, ``{"type": "list"}``).
     """
@@ -147,6 +150,7 @@ class FragmentOperation:
     value: YamlValue = None
     deduplicate: bool = False
     missing_ok: bool = False
+    overwrite_ok: bool = False
     assertion: dict[str, YamlValue] = field(default_factory=dict)
 
 
