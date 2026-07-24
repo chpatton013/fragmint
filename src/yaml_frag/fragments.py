@@ -8,7 +8,6 @@ Responsibilities:
 2. Parse and validate the fragment against ``schemas/fragment.schema.json`` and
    the rules in README.md "Validation":
    - supported ``fragment.version``;
-   - ``fragment.name`` matches the resolved path (mismatch is an error);
    - each operation ``op`` is recognized;
    - ``path`` is a valid JSON Pointer;
    - required fields present per op (e.g. ``value`` for set/merge/append/...);
@@ -119,8 +118,8 @@ def load_fragment(fragments_dir: Path, name: str) -> Fragment:
 
     Raise :class:`~yaml_frag.errors.UnknownFragmentError` if the
     file does not exist, and
-    :class:`~yaml_frag.errors.FragmentError` for any validation
-    failure (including a name/path mismatch), with fragment name context.
+    :class:`~yaml_frag.errors.FragmentError` for any validation failure, with
+    fragment name context.
     """
     path = resolve_fragment_path(fragments_dir, name)
     if not path.is_file():
@@ -154,13 +153,6 @@ def load_fragment(fragments_dir: Path, name: str) -> Fragment:
         raise FragmentError(
             f"fragment {name} ({path}): unsupported version {version!r}, "
             f"expected {SUPPORTED_FRAGMENT_VERSION}"
-        )
-
-    declared_name = fragment_meta.get("name")
-    if declared_name != name:
-        raise FragmentError(
-            f"fragment {name} ({path}): declared name {declared_name!r} does not match "
-            f"expected name {name!r}"
         )
 
     description = fragment_meta.get("description", "")

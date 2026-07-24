@@ -1,6 +1,5 @@
 fragment:
   version: 1
-  name: hardware/generic-vm
   description: Configuration for a generic virtual machine guest.
 
 requires:

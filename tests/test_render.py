@@ -234,7 +234,6 @@ targets:
         """
 fragment:
   version: 1
-  name: failing-assert
   description: deliberately fails an assertion
 operations:
   - op: set
@@ -294,7 +293,6 @@ targets:
         """
 fragment:
   version: 1
-  name: echoes
   description: echoes a variable whose value itself contains template braces
 operations:
   - op: set

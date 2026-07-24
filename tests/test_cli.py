@@ -95,7 +95,6 @@ def test_render_all_returns_nonzero_if_any_fails(
         """
 fragment:
   version: 1
-  name: ok
   description: fine
 operations:
   - op: set
@@ -147,7 +146,6 @@ def test_validation_failure_exit_code(tmp_path: Path) -> None:
         """
 fragment:
   version: 1
-  name: broken
   description: fails an assertion
 operations:
   - op: set
@@ -209,7 +207,6 @@ def test_validator_selection(tmp_path: Path) -> None:
         """
 fragment:
   version: 1
-  name: ok
   description: fine
 operations:
   - op: set
@@ -394,7 +391,6 @@ def test_atomic_output_no_partial_file_on_failure(
         """
 fragment:
   version: 1
-  name: broken
   description: fails an assertion
 operations:
   - op: set

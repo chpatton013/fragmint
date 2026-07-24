@@ -1,6 +1,5 @@
 fragment:
   version: 1
-  name: roles/docker-host
   description: Prerequisite packages for a Docker host.
 
 # Placeholder demonstrating explicit composition; refine once the Docker

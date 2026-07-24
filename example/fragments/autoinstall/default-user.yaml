@@ -1,6 +1,5 @@
 fragment:
   version: 1
-  name: autoinstall/default-user
   description: Configure the primary admin user, SSH, and passwordless sudo.
 
 requires:

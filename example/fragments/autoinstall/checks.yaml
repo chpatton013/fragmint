@@ -1,6 +1,5 @@
 fragment:
   version: 1
-  name: autoinstall/checks
   description: >-
     Structural assertions for a valid Ubuntu autoinstall document. These used to
     be hard-coded in the renderer; they now live here as data so the tool stays

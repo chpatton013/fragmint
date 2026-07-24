@@ -1,6 +1,5 @@
 fragment:
   version: 1
-  name: roles/proxmox-host
   description: Bootstrap prerequisites for a future Proxmox host.
 
 # Placeholder until the exact Proxmox installation flow is decided. It still

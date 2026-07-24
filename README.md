@@ -376,7 +376,6 @@ referenced by that path (minus `.yaml`):
 ```yaml
 fragment:
   version: 1
-  name: autoinstall/default-user   # must match the file path minus .yaml
   description: Configure the default administrative user and SSH access.
 
 requires:
@@ -402,8 +401,7 @@ operations:
 ```
 
 The renderer resolves a fragment reference like `hardware/gb10` to
-`<fragments_dir>/hardware/gb10.yaml`; the fragment file must declare a
-matching `fragment.name`. A mismatch is an error.
+`<fragments_dir>/hardware/gb10.yaml`.
 
 ### Paths
 
@@ -631,8 +629,8 @@ built into the renderer; the last two are supplied by the project.
    unique target/group names; referenced groups exist; fragments are lists of
    strings; variables are mappings; order preserved). Fragments are validated
    against `schemas/fragment.schema.json` plus rules (supported fragment
-   version; name matches path; recognized `op`; valid path; op-appropriate
-   fields present; assertions use supported forms). Project configuration is
+   version; recognized `op`; valid path; op-appropriate fields present;
+   assertions use supported forms). Project configuration is
    validated against `schemas/project.schema.json`; secrets against
    `schemas/secrets.schema.json`.
 2. **Generic rendered-document validation (built in).** Only document-agnostic

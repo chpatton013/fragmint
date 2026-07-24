@@ -1,6 +1,5 @@
 fragment:
   version: 1
-  name: autoinstall/base
   description: Establish the required Ubuntu autoinstall structure.
 
 operations:

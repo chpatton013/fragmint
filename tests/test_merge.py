@@ -11,10 +11,8 @@ import pytest
 from yaml_frag import merge, pointer, templating
 from yaml_frag.errors import (
     AssertionFailedError,
-    FragmentError,
     MergeConflictError,
     TemplateRenderError,
-    UnknownFragmentError,
     YamlFragError,
 )
 from yaml_frag.models import FragmentOperation, ProvenanceEntry
@@ -272,34 +270,6 @@ def test_typed_template_values() -> None:
         operation_index=0,
     )
     assert embedded == "value is False"
-
-
-def test_fragment_name_mismatch_fails() -> None:
-    """A fragment whose name != its path raises FragmentError."""
-    try:
-        from yaml_frag import fragments
-    except ImportError:  # pragma: no cover - module always importable
-        pytest.skip("fragments module unavailable")
-
-    import tempfile
-    from pathlib import Path
-
-    with tempfile.TemporaryDirectory() as tmp:
-        fragments_dir = Path(tmp)
-        bad_fragment = fragments_dir / "hardware" / "gb10.yaml"
-        bad_fragment.parent.mkdir(parents=True, exist_ok=True)
-        bad_fragment.write_text(
-            "fragment:\n"
-            "  version: 1\n"
-            "  name: hardware/wrong-name\n"
-            "  description: test\n"
-            "operations: []\n"
-        )
-        try:
-            with pytest.raises((FragmentError, UnknownFragmentError)):
-                fragments.load_fragment(fragments_dir, "hardware/gb10")
-        except NotImplementedError:
-            pytest.skip("fragments.load_fragment not yet implemented (owned by another slice)")
 
 
 def test_provenance_recording() -> None:

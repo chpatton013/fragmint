@@ -1,6 +1,5 @@
 fragment:
   version: 1
-  name: hosts/gb10-01
   description: Host-specific configuration for gb10-01.
 
 # Host-specific values (hostname, password hash, interface) are supplied as

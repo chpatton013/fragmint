@@ -154,9 +154,10 @@ class FragmentOperation:
 class Fragment:
     """A parsed, schema-valid fragment document.
 
-    See README.md "Authoring fragments". ``name`` must match the fragment's path
-    relative to the fragments directory (minus ``.yaml``); a mismatch is a
-    :class:`~yaml_frag.errors.FragmentError`. Fragments may live under any
+    See README.md "Authoring fragments". ``name`` is the fragment's reference
+    path relative to the fragments directory (minus ``.yaml``), used for
+    diagnostics and provenance; it is derived from how the fragment was
+    requested, not from the file's contents. Fragments may live under any
     nested path the project chooses.
     """
 
