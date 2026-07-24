@@ -3,8 +3,7 @@
 Every user-facing failure should raise one of these exceptions with a message
 that contains enough context to find the source file and operation (target
 name, fragment name, operation index, path, variable name, as applicable).
-See PLAN.md sections "Fail closed", "Python requirements", and
-"Error-message tests".
+See README.md "Design principles" (fail closed).
 
 Each concrete exception declares the :class:`~yaml_frag.exit_codes.ExitCode`
 the CLI should return when it propagates to the top level. The CLI is expected
@@ -60,7 +59,7 @@ class VariableResolutionError(YamlFragError):
 
     Base for secret-lookup and capture-subprocess failures. Messages must name
     the target and the variable, and must never include resolved secret values
-    or secret-derived command arguments (PLAN.md "Variable value sources").
+    or secret-derived command arguments. See README.md "Variable value sources".
     """
 
     exit_code = ExitCode.VARIABLE_RESOLUTION

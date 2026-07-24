@@ -2,7 +2,7 @@
 
 A variable value may be a plain literal (the default) or a tagged *source* that
 is resolved AFTER the normal defaults/group/target/CLI layering but BEFORE
-templating. See PLAN.md "Variable value sources".
+templating. See README.md "Variable value sources".
 
 Syntax (``from:`` discriminator). A mapping is treated as a source only when it
 has a ``from`` key whose value is one of ``literal``, ``secret``, ``capture``;
@@ -37,7 +37,7 @@ Security (enforced here so it can be reviewed in one place):
 
 Testability: capture execution goes through the injectable
 :class:`CommandRunner` protocol so unit tests can supply a deterministic stub
-instead of running real programs (PLAN.md "Testing requirements").
+instead of running real programs (see ``tests/test_sources.py``).
 """
 
 from __future__ import annotations
@@ -204,7 +204,7 @@ def resolve_source(
     its non-executing description (``<secret NAME>`` / ``<capture: ...>``)
     WITHOUT looking up the secret store or running any subprocess. This is what
     ``explain`` uses so it can build the document for provenance without
-    executing captures or revealing secrets (PLAN.md "Resolution timing").
+    executing captures or revealing secrets (README.md "Resolution timing").
 
     Never log resolved secret values or secret-sourced arguments.
     """
@@ -306,8 +306,7 @@ def describe_source(raw: YamlValue) -> str:
     Used by ``inspect``/``explain`` so they can show what a variable is WITHOUT
     running captures or revealing secrets, e.g. ``"<secret gb10_password>"`` or
     ``"<capture: openssl passwd -6 -stdin>"``. Literals are returned via their
-    normal (name-based) redaction path instead. See PLAN.md "Show resolved
-    inputs".
+    normal (name-based) redaction path instead. See README.md "CLI usage".
     """
     source = parse_source(raw)
     if isinstance(source, SecretSource):

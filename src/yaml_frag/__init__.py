@@ -6,7 +6,7 @@ merge operations. The renderer holds no knowledge of any particular document
 schema; domain specifics (e.g. Ubuntu autoinstall) live in project
 configuration, schemas, validators, and fragments.
 
-See PLAN.md for the full specification. Public entry points live in
+See README.md for the full specification. Public entry points live in
 :mod:`yaml_frag.cli` and :mod:`yaml_frag.render`.
 """
 

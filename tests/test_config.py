@@ -1,4 +1,4 @@
-"""Project-configuration tests. Covers PLAN.md "Config tests"."""
+"""Project-configuration tests. See README.md "Project configuration"."""
 
 from __future__ import annotations
 

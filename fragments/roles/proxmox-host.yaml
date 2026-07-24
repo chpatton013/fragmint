@@ -4,7 +4,7 @@ fragment:
   description: Bootstrap prerequisites for a future Proxmox host.
 
 # Placeholder until the exact Proxmox installation flow is decided. It still
-# demonstrates explicit composition. See PLAN.md "roles/proxmox-host.yaml".
+# demonstrates explicit composition (see README.md "Authoring fragments").
 operations:
   - op: append
     path: /autoinstall/user-data/packages

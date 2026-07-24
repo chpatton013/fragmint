@@ -1,4 +1,4 @@
-"""Inventory resolution and precedence tests. Covers PLAN.md "Inventory tests"."""
+"""Inventory resolution and precedence tests. See README.md "Authoring inventory"."""
 
 from __future__ import annotations
 

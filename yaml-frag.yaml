@@ -1,5 +1,5 @@
 # Project configuration for the example Ubuntu autoinstall project.
-# See PLAN.md "Project configuration".
+# See README.md "Project configuration".
 #
 # Everything domain-specific lives here (and in fragments), never in the
 # renderer: the #cloud-config header comes from the output template, and the

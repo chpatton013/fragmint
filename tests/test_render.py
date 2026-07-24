@@ -1,8 +1,8 @@
-"""Rendering and snapshot tests. Covers PLAN.md "Snapshot tests".
+"""Rendering and snapshot tests.
 
 Snapshot fixtures live in tests/fixtures/expected/<target>/user-data. To
-(re)generate them once the renderer works, render each target and write the
-output there, then review the diff before committing.
+regenerate them, render each target and write the output there, then review
+the diff before committing (see tests/fixtures/README.md).
 """
 
 from __future__ import annotations
@@ -67,15 +67,15 @@ def test_snapshot_matches_expected(
     assert text.encode("utf-8") == expected
 
 
-def test_gb10_matches_plan_expected_render(
+def test_gb10_matches_readme_expected_render(
     config_path: Path,
     inventory_path: Path,
     fragments_dir: Path,
     secrets_example_path: Path,
     stub_runner,
 ) -> None:
-    """gb10-01 renders the expected YAML in PLAN.md 'Complete expected render'
-    (acceptance criterion 17), using a stubbed CommandRunner for the
+    """gb10-01 renders the expected YAML shown in README.md's "Example project:
+    Ubuntu autoinstall" section, using a stubbed CommandRunner for the
     capture-derived password hash."""
     cfg, result = _render(
         "gb10-01",
@@ -379,7 +379,7 @@ def test_redact_variables_never_reveals_source_descriptions_even_with_show_secre
 
 def test_redact_variables_secret_source_shown_regardless_of_name() -> None:
     """A variable defined via `secret`/`capture` is redacted regardless of its
-    name (PLAN.md "Variable value sources": "sensitive-by-source redaction")."""
+    name (README.md "Variable value sources": sensitive-by-source redaction)."""
     variables = {"totally_innocuous_name": {"from": "secret", "name": "x"}}
     redacted = render_mod.redact_variables(variables)
     assert redacted["totally_innocuous_name"] == "<secret x>"

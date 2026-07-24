@@ -1,6 +1,6 @@
 """Generic rendered-document validation and external validators.
 
-See PLAN.md "Validation". The renderer performs only document-AGNOSTIC checks;
+See README.md "Validation". The renderer performs only document-AGNOSTIC checks;
 any document-specific structural requirement is expressed by the project as
 ``assert`` operations in fragments (handled in :mod:`merge`) or as an external
 validator (below). There is deliberately no built-in knowledge of autoinstall
@@ -48,8 +48,8 @@ def check_unresolved_markers(document: YamlValue) -> None:
     Recurse through ``document`` and raise
     :class:`~yaml_frag.errors.ValidationError` if any string value contains
     ``{{`` or ``{%`` (a sign that templating did not fully resolve). This is the
-    one universal, document-agnostic structural check. See PLAN.md "Generic
-    rendered-document validation".
+    one universal, document-agnostic structural check. See README.md
+    "Validation".
     """
 
     def _walk(node: YamlValue, path: str) -> None:
@@ -92,8 +92,9 @@ def validate_against_schema(document: YamlValue, schema_path: Path) -> None:
 def run_validator(output_path: Path, command: tuple[str, ...]) -> None:
     """Run a named external validator against the written output file.
 
-    ``command`` comes from a project-config validator entry (PLAN.md "Named
-    validators"), e.g. ``("python3", "tools/validate-autoinstall-user-data.py")``.
+    ``command`` comes from a project-config validator entry (README.md
+    "Validation": named validators), e.g.
+    ``("python3", "tools/validate-autoinstall-user-data.py")``.
     The rendered output path is passed as the final argument. Raise
     :class:`~yaml_frag.errors.ValidationError` on nonzero exit, including
     captured stdout/stderr. Selected via ``--validator NAME``.

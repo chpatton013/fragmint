@@ -3,7 +3,7 @@
 These are plain, immutable value objects. They contain no behavior beyond
 trivial constructors/accessors; parsing and validation live in :mod:`inventory`,
 :mod:`fragments`, and :mod:`config`, and merge/render logic lives in :mod:`merge`
-and :mod:`render`. See PLAN.md "Python requirements".
+and :mod:`render`.
 
 Type conventions
 ----------------
@@ -39,7 +39,7 @@ Variables = dict[str, YamlValue]
 class LiteralSource:
     """A value used verbatim. The default when a variable has no ``from:`` tag,
     and also the explicit escape hatch ``{from: literal, value: ...}`` for a
-    literal mapping that would otherwise look like a source. See PLAN.md
+    literal mapping that would otherwise look like a source. See README.md
     "Variable value sources"."""
 
     value: YamlValue
@@ -77,7 +77,7 @@ class SecretStore:
 
     A flat name -> value store referenced by :class:`SecretSource`. Values must
     never be logged or written to non-output diagnostics. Lookup lives in
-    :mod:`sources`. See PLAN.md "Secrets".
+    :mod:`sources`. See README.md "Secrets".
     """
 
     secrets: dict[str, YamlValue] = field(default_factory=dict)
@@ -87,8 +87,8 @@ class SecretStore:
 class GroupDefinition:
     """A reusable set of variables and fragments referenced by targets.
 
-    See PLAN.md "Inventory format". Group order is significant and must never
-    be reordered.
+    See README.md "Authoring inventory". Group order is significant and must
+    never be reordered.
     """
 
     name: str
@@ -116,7 +116,7 @@ class TargetDefinition:
 class Inventory:
     """The fully parsed inventory document.
 
-    See PLAN.md "Inventory format". ``default_variables`` and
+    See README.md "Authoring inventory". ``default_variables`` and
     ``default_fragments`` come from the top-level ``defaults`` block.
     """
 
@@ -131,7 +131,7 @@ class Inventory:
 class FragmentOperation:
     """A single merge instruction within a fragment.
 
-    ``op`` is one of the operations in PLAN.md "Supported merge operations":
+    ``op`` is one of the operations in README.md "Merge operations":
     ``set``, ``merge``, ``append``, ``prepend``, ``remove``,
     ``remove-list-items``, ``assert``.
 
@@ -154,7 +154,7 @@ class FragmentOperation:
 class Fragment:
     """A parsed, schema-valid fragment document.
 
-    See PLAN.md "Fragment format". ``name`` must match the fragment's path
+    See README.md "Authoring fragments". ``name`` must match the fragment's path
     relative to the fragments directory (minus ``.yaml``); a mismatch is a
     :class:`~yaml_frag.errors.FragmentError`. Fragments may live under any
     nested path the project chooses.
@@ -171,7 +171,7 @@ class Fragment:
 class ProvenanceEntry:
     """Records which fragment/operation last touched a document path.
 
-    See PLAN.md "Provenance tracking". ``operation`` is the ``op`` string;
+    See README.md "Provenance and `explain`". ``operation`` is the ``op`` string;
     ``operation_index`` is the zero-based index within the fragment.
     """
 
@@ -185,10 +185,10 @@ class ResolvedTarget:
     """The fully resolved inputs for one target, prior to rendering.
 
     Produced by :mod:`inventory`. ``fragments`` is the final ordered fragment
-    reference list (defaults -> groups -> target, per PLAN.md "Fragment
-    ordering"); precedence is purely positional. ``variables`` is the fully
+    reference list (defaults -> groups -> target, per README.md "Fragment
+    order"); precedence is purely positional. ``variables`` is the fully
     layered variable map (defaults -> groups -> target -> secrets -> CLI, per
-    PLAN.md "Variable precedence").
+    README.md "Variable precedence").
     """
 
     name: str
@@ -199,7 +199,7 @@ class ResolvedTarget:
 
 @dataclass(frozen=True)
 class OutputSpec:
-    """How a target's rendered document is written. See PLAN.md
+    """How a target's rendered document is written. See README.md
     "Project configuration".
 
     ``path`` is a destination pattern containing ``{target}``. ``template`` is
@@ -218,7 +218,8 @@ class OutputSpec:
 
 @dataclass(frozen=True)
 class ValidatorSpec:
-    """A named external validator. See PLAN.md "Named validators".
+    """A named external validator. See README.md "Validation" (named
+    validators).
 
     ``command`` is run against the written output file; a nonzero exit is a
     failure.
@@ -232,7 +233,7 @@ class ValidatorSpec:
 class ProjectConfig:
     """The parsed project-configuration file (``yaml-frag.yaml``).
 
-    See PLAN.md "Project configuration". This is where domain-specific behavior
+    See README.md "Project configuration". This is where domain-specific behavior
     (output template/header, path layout, validators, document schema) lives —
     never in the renderer code.
     """
@@ -251,7 +252,7 @@ class RenderResult:
     ``document`` is the final merged data (the root mapping). ``provenance``
     maps a document path string (e.g. ``/autoinstall/kernel/package``) to the
     list of contributing entries, most recent last. ``overrides`` holds any
-    override warnings collected during merge (see PLAN.md "Conflict reporting").
+    override warnings collected during merge (see README.md "Conflict reporting").
     Serialization and output templating happen in :mod:`render`.
     """
 

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.com/yaml-frag/project.schema.json",
   "title": "yaml-frag project configuration",
-  "description": "Structural schema for yaml-frag.yaml. See PLAN.md 'Project configuration'. Cross-cutting rules (e.g. that {target} appears in output.path when rendering many targets, and that --validator names exist) are enforced in config.py.",
+  "description": "Structural schema for yaml-frag.yaml. See README.md 'Project configuration'. Cross-cutting rules (e.g. that {target} appears in output.path when rendering many targets, and that --validator names exist) are enforced in config.py.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "output"],

@@ -1,7 +1,7 @@
 """Centralized YAML loading and deterministic serialization.
 
 All YAML I/O should go through this module so parsing and output formatting
-stay consistent. See PLAN.md "YAML serialization".
+stay consistent. See README.md "YAML serialization".
 
 Loading:
 - Parse safely (no arbitrary Python object construction / no unsafe tags).
@@ -10,7 +10,7 @@ Loading:
   returning so downstream code sees the ``YamlValue`` shape from
   :mod:`models`).
 
-Serialization requirements (PLAN.md "YAML serialization"):
+Serialization requirements (README.md "YAML serialization"):
 - preserve mapping insertion order (do NOT sort keys);
 - two-space indentation;
 - never emit Python-specific YAML tags;
@@ -21,7 +21,7 @@ Serialization requirements (PLAN.md "YAML serialization"):
 
 Any header such as ``#cloud-config`` is NOT YAML data; it comes from the
 project's output template, applied by :mod:`render`, not by this module. See
-PLAN.md "Project configuration" and "YAML serialization".
+README.md "Project configuration" and "YAML serialization".
 
 ``ruamel.yaml`` is recommended for the formatting control above; PyYAML is
 acceptable if the determinism requirements are met.
@@ -97,7 +97,7 @@ def dump_str(document: YamlValue) -> str:
     yaml.default_flow_style = False
     # mapping=2 gives two-space indentation; sequence=4/offset=2 gives list
     # items indented two spaces under their key ("key:\n  - item"), matching
-    # PLAN.md's examples. ruamel preserves plain-dict insertion order by
+    # README.md's examples. ruamel preserves plain-dict insertion order by
     # default (no key sorting), satisfying the "do not sort keys" rule.
     yaml.indent(mapping=2, sequence=4, offset=2)
     yaml.width = 2**31 - 1

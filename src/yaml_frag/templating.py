@@ -1,6 +1,6 @@
 """Strict, sandboxed Jinja-style template substitution.
 
-See PLAN.md "Template rendering" and "Security".
+See README.md "Template rendering".
 
 Requirements to implement:
 - Use a strict undefined (``jinja2.StrictUndefined``) so a missing variable
@@ -12,15 +12,14 @@ Requirements to implement:
   the result keeps its Python/YAML type (e.g. Boolean ``false``, not the
   string ``"False"``). Use a native-environment strategy or detect the
   "whole string is one expression" case and coerce accordingly.
-- Expose only the safe filters listed in PLAN.md: ``default``, ``lower``,
+- Expose only the safe filters listed in README.md: ``default``, ``lower``,
   ``upper``, ``replace``, ``join``, ``tojson``.
 - Rendering applies to already-parsed scalar strings only. Never reparse the
-  result as YAML (PLAN.md "Template scope").
+  result as YAML (README.md "Template rendering").
 
 Errors must be raised as
 :class:`~yaml_frag.errors.TemplateRenderError` and include the target name,
-fragment name, operation index, and missing/failed variable name (PLAN.md
-"Template rendering", "Error-message tests").
+fragment name, operation index, and missing/failed variable name.
 """
 
 from __future__ import annotations
@@ -34,7 +33,7 @@ from jinja2.sandbox import SandboxedEnvironment
 from .errors import TemplateRenderError
 from .models import Variables, YamlValue
 
-#: The only filters exposed to fragment templates (PLAN.md "Security").
+#: The only filters exposed to fragment templates (README.md "Template rendering").
 _ALLOWED_FILTERS = {"default", "lower", "upper", "replace", "join", "tojson"}
 
 #: Matches a scalar string consisting of exactly one ``{{ expr }}`` template

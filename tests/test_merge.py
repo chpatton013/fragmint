@@ -1,8 +1,7 @@
 """Unit tests for merge operations, templating, pointers, and provenance.
 
-Covers PLAN.md "Unit tests". Each test is a stub to implement; the docstring
-states the exact behavior to assert. Remove the module-level skip as tests are
-filled in.
+See README.md "Merge operations" and "Template rendering" for the behavior
+each test asserts.
 """
 
 from __future__ import annotations

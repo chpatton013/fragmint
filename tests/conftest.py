@@ -2,7 +2,7 @@
 
 Fixtures point at the repo's real project config, inventory, and fragments so
 tests can render the representative targets. Snapshot expectations live under
-``tests/fixtures/`` (see PLAN.md "Snapshot tests").
+``tests/fixtures/expected/`` (see ``tests/fixtures/README.md``).
 """
 
 from __future__ import annotations

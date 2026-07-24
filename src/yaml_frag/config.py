@@ -6,7 +6,7 @@ renderer code. It declares default input locations, the output spec (path
 pattern + optional text template + optional document schema + default
 validators), and named external validators.
 
-See PLAN.md "Project configuration". Validate against
+See README.md "Project configuration". Validate against
 ``schemas/project.schema.json`` and raise
 :class:`~yaml_frag.errors.ConfigError` (with file/field context) on any problem.
 """
@@ -67,7 +67,7 @@ def load_config(path: Path | None = None) -> ProjectConfig:
             f"(at {'/'.join(str(part) for part in exc.path)})"
         ) from exc
 
-    # Schema validation above guarantees the shape PLAN.md documents; treat the
+    # Schema validation above guarantees the shape README.md documents; treat the
     # parsed document as loosely-typed data from here on rather than fighting
     # the recursive YamlValue union.
     doc = cast(dict[str, Any], raw)
@@ -120,8 +120,8 @@ def resolve_output_path(config: ProjectConfig, target: str, override: Path | Non
     """Compute the destination path for ``target``.
 
     When ``override`` is given, use it verbatim. Otherwise substitute
-    ``{target}`` into ``config.output.path``. See PLAN.md "Project
-    configuration" and "Render one target".
+    ``{target}`` into ``config.output.path``. See README.md "Project
+    configuration" and "CLI usage".
     """
     if override is not None:
         return override
@@ -137,7 +137,8 @@ def select_validators(
     If ``requested`` is non-empty, use it (validating each name exists in
     ``config.validators``; unknown names raise
     :class:`~yaml_frag.errors.ConfigError`). Otherwise fall back to
-    ``config.output.validators``. See PLAN.md "Named validators".
+    ``config.output.validators``. See README.md "Validation" (named
+    validators).
     """
     if requested:
         for name in requested:

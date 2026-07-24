@@ -11,7 +11,7 @@ tests/fixtures/expected/<target>/user-data
 ```
 
 for the targets in `tests/test_render.py::SNAPSHOT_TARGETS`
-(`generic-vm-01`, `gb10-01`, `gb10-02`). See PLAN.md "Snapshot tests".
+(`generic-vm-01`, `gb10-01`, `gb10-02`). See README.md "Development".
 
 To (re)generate after the renderer works:
 

@@ -3,7 +3,7 @@ fragment:
   name: ubuntu-24.04
   description: Ubuntu 24.04 Server installation source.
 
-# Do not place the HWE kernel here; it may be hardware-specific. See PLAN.md.
+# Do not place the HWE kernel here; it may be hardware-specific. See README.md.
 operations:
   - op: set
     path: /autoinstall/source

@@ -1,4 +1,4 @@
-"""CLI behavior and exit-code tests. Covers PLAN.md "CLI tests" and "Exit codes".
+"""CLI behavior and exit-code tests. See README.md "CLI usage" and "Exit codes".
 
 Use ``click.testing.CliRunner`` (or invoke ``yaml_frag.cli.main`` with an argv
 list) and assert on stdout/stderr separation and exit codes.
@@ -306,7 +306,7 @@ def test_explain_does_not_execute_captures_or_reveal_secrets(
     repo_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """`explain` works without --secrets and shows capture-derived values as a
-    non-executing placeholder, never running the capture (PLAN "Resolution
+    non-executing placeholder, never running the capture (README "Resolution
     timing"). The autouse stub would yield the stub hash if a capture ran, so
     its absence proves no capture executed."""
     exit_code = main(

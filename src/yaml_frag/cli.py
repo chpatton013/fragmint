@@ -1,6 +1,6 @@
 """Command-line interface for ``yaml-frag``.
 
-See PLAN.md "Command-line interface". This module wires up the command
+See README.md "CLI usage". This module wires up the command
 structure, options, and the top-level error-to-exit-code mapping. Command
 bodies are stubs to be implemented against :mod:`config`, :mod:`render`,
 :mod:`inventory`, and :mod:`provenance`.
@@ -9,7 +9,7 @@ Domain defaults (inventory/fragments locations, output path/template,
 validators) come from the project configuration (:mod:`config`); the CLI flags
 below override those defaults per invocation.
 
-Output discipline (PLAN.md): rendered output goes to STDOUT only for
+Output discipline (README.md): rendered output goes to STDOUT only for
 ``--stdout``; ALL diagnostics (warnings, errors, progress) go to STDERR.
 """
 
@@ -39,7 +39,7 @@ def _parse_var(ctx: click.Context, param: click.Parameter, values: tuple[str, ..
 
     Raise ``click.BadParameter`` (which maps to ExitCode.USAGE) if any value is
     missing the ``=`` separator. Values are strings here; type coercion happens
-    during templating (PLAN.md "Template rendering": typed values).
+    during templating (README.md "Template rendering").
     """
     result: dict[str, str] = {}
     for raw in values:
@@ -58,7 +58,7 @@ def _resolve_inputs(
     fragments_dir: Path | None,
 ) -> tuple[Path, Path]:
     """Apply CLI overrides over the project-config defaults for inventory
-    and fragments-dir locations (PLAN.md "Command-line interface")."""
+    and fragments-dir locations (README.md "CLI usage")."""
     resolved_inventory = inventory_path if inventory_path is not None else Path(config.inventory)
     resolved_fragments = fragments_dir if fragments_dir is not None else Path(config.fragments_dir)
     return resolved_inventory, resolved_fragments
@@ -213,7 +213,7 @@ def render_all(
     """Render every target in inventory order; nonzero if any fails.
 
     Do not leave a partial final output file for a failed target (atomic
-    writes; PLAN.md "Render all targets").
+    writes; README.md "CLI usage").
     """
     cfg = config_mod.load_config(config_path)
     inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
@@ -355,13 +355,13 @@ def explain(
 ) -> None:
     """Show provenance for TARGET, optionally scoped to a single PATH.
 
-    See PLAN.md "Provenance tracking" for the expected output format.
+    See README.md "Provenance and `explain`" for the expected output format.
     """
     cfg = config_mod.load_config(config_path)
     inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
 
     # Redact sources so explain never executes captures or reveals secrets
-    # (PLAN.md "Resolution timing"); secret/capture-derived values appear as
+    # (README.md "Resolution timing"); secret/capture-derived values appear as
     # non-executing placeholders in the provenance output.
     result = render_mod.render_target(
         target,
@@ -448,7 +448,7 @@ def inspect(
 ) -> None:
     """Show resolved groups, fragment order, and (redacted) variables.
 
-    See PLAN.md "Show resolved inputs".
+    See README.md "CLI usage".
     """
     cfg = config_mod.load_config(config_path)
     inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
@@ -473,7 +473,7 @@ def main(argv: list[str] | None = None) -> int:
     Catches :class:`~yaml_frag.errors.YamlFragError`, prints its message to
     STDERR, and returns ``exc.exit_code``. Click usage errors map to
     :data:`ExitCode.USAGE`. Returns the process exit code (never raises for
-    known failures). See PLAN.md "Exit codes".
+    known failures). See README.md "Exit codes".
     """
     try:
         cli.main(args=argv, standalone_mode=False)

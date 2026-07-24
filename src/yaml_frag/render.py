@@ -2,7 +2,7 @@
 
 Ties together project config, inventory resolution, fragment loading,
 templating, merge operations, provenance, validation, serialization, and output
-templating. See PLAN.md "Rendering algorithm".
+templating. See README.md "Rendering algorithm".
 
 The functions here are pure with respect to the filesystem where practical:
 :func:`render_target` returns a :class:`~models.RenderResult` (in-memory),
@@ -31,11 +31,11 @@ from .provenance import ProvenanceTracker
 from .sources import CommandRunner
 
 #: Literal token an output template may contain; replaced by the serialized
-#: YAML during :func:`compose_output`. See PLAN.md "Project configuration".
+#: YAML during :func:`compose_output`. See README.md "Project configuration".
 DOCUMENT_TOKEN = "{{ document }}"
 
 #: Substring patterns that mark a variable name for redaction in ``inspect``
-#: output. See PLAN.md "Show resolved inputs".
+#: output. See README.md "CLI usage".
 REDACT_SUBSTRINGS = ("password", "secret", "token", "private", "credential")
 
 
@@ -53,7 +53,7 @@ def render_target(
 ) -> RenderResult:
     """Render a single target in memory.
 
-    Steps (PLAN.md "Rendering algorithm"):
+    Steps (README.md "Rendering algorithm"):
     1. load + validate inventory;
     2. resolve defaults/groups/target (fragment order + LAYERED-but-unresolved
        variable map) via :func:`inventory.resolve_target`;
@@ -164,7 +164,7 @@ def write_output(text: str, path: Path) -> Path:
 
     Create parent directories, write to a temporary file in the destination
     directory, then ``os.replace`` into place so a failure never leaves a
-    partial final file (PLAN.md "Render all targets"). Return ``path``. Only the
+    partial final file (README.md "CLI usage"). Return ``path``. Only the
     configured output file is written — no companion files are forced.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -191,8 +191,8 @@ def redact_variables(variables: Variables, *, show_secrets: bool = False) -> Var
     shown as a non-executing description (see :func:`sources.describe_source`),
     regardless of ``show_secrets``. Otherwise, a variable is redacted when its
     name contains any of :data:`REDACT_SUBSTRINGS` (case-insensitive) and
-    ``show_secrets`` is False. Used by the ``inspect`` command (PLAN.md "Show
-    resolved inputs").
+    ``show_secrets`` is False. Used by the ``inspect`` command (README.md
+    "CLI usage").
     """
     redacted: Variables = {}
     for name, value in variables.items():

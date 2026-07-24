@@ -1,6 +1,6 @@
 """Provenance tracking and override reporting.
 
-See PLAN.md "Provenance tracking" and "Conflict reporting".
+See README.md "Provenance and `explain`" and "Conflict reporting".
 
 The tracker records which fragment/operation last modified each document path,
 and accumulates per-path contributor history so ``explain`` can show where a
@@ -22,7 +22,7 @@ class ProvenanceTracker:
     - Keep an ordered map ``path -> list[ProvenanceEntry]`` (most recent last).
     - ``record`` is called by :mod:`merge` after each path mutation.
     - ``overrides`` collects human-readable warning strings for ``set``
-      operations that replaced an existing value, formatted per PLAN.md
+      operations that replaced an existing value, formatted per README.md
       "Conflict reporting" (previous source vs new source).
     """
 

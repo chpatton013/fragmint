@@ -19,5 +19,5 @@ htmlcov/
 /rendered/*
 !/rendered/.gitkeep
 
-# Local, untracked secrets overlay (see PLAN.md "Optional external secret variables")
+# Local, untracked secrets overlay (see README.md "Secrets")
 inventory/secrets.yaml

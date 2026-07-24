@@ -5,7 +5,7 @@ fragment:
     Structural assertions for a valid Ubuntu autoinstall document. These used to
     be hard-coded in the renderer; they now live here as data so the tool stays
     generic. Include this fragment LAST for a target (after everything else has
-    been composed). See PLAN.md "Document assertions".
+    been composed). See README.md "Validation" (document assertions).
 
 operations:
   - op: assert

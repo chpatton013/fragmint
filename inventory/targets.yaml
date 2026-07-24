@@ -1,5 +1,5 @@
 # Inventory: defaults, reusable groups, and targets.
-# See PLAN.md "Inventory format".
+# See README.md "Authoring inventory".
 #
 # This is the example autoinstall project. A "target" is any named thing you
 # render a document for; here they happen to be machines. Fragment paths are
@@ -60,7 +60,7 @@ targets:
       identity_hostname: gb10-01
       # Computed at render time: feed the plaintext password secret to
       # `openssl passwd -6` on stdin and capture the resulting hash.
-      # See PLAN.md "Variable value sources". Requires --secrets.
+      # See README.md "Variable value sources". Requires --secrets.
       identity_password_hash:
         from: capture
         command: [openssl, passwd, -6, -stdin]

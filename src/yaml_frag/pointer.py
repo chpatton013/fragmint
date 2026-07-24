@@ -1,6 +1,6 @@
 """JSON Pointer-style path handling.
 
-Paths address locations in the merged document. See PLAN.md "Paths".
+Paths address locations in the merged document. See README.md "Paths".
 
 Rules to implement:
 - ``/`` addresses the root document.
@@ -12,7 +12,8 @@ Rules to implement:
   ``~0`` — follow the spec exactly.
 
 This module is intentionally small and pure (no I/O, no YAML), so it can be
-unit-tested in isolation (PLAN.md "Unit tests": "JSON Pointer escaping").
+unit-tested in isolation (see ``tests/test_merge.py``'s JSON-Pointer-escaping
+tests).
 """
 
 from __future__ import annotations
@@ -65,8 +66,8 @@ def get(document: YamlValue, pointer: str) -> tuple[bool, YamlValue]:
 def set_(document: dict[str, YamlValue], pointer: str, value: YamlValue) -> None:
     """Set ``value`` at ``pointer``, creating missing parent mappings.
 
-    Mutates ``document`` in place. Used by the ``set`` operation
-    (PLAN.md "set"). If an existing intermediate node is a non-mapping,
+    Mutates ``document`` in place. Used by the ``set`` operation (README.md
+    "Merge operations"). If an existing intermediate node is a non-mapping,
     raise :class:`~yaml_frag.errors.MergeConflictError`.
     """
     tokens = parse_pointer(pointer)
@@ -103,7 +104,7 @@ def delete(document: dict[str, YamlValue], pointer: str, *, missing_ok: bool) ->
     Return ``True`` if something was removed. If the path is absent and
     ``missing_ok`` is ``False``, raise
     :class:`~yaml_frag.errors.YamlFragError`; if ``True``, return
-    ``False``. Used by the ``remove`` operation (PLAN.md "remove").
+    ``False``. Used by the ``remove`` operation (README.md "Merge operations").
     """
     tokens = parse_pointer(pointer)
     if not tokens:

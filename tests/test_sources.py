@@ -1,4 +1,4 @@
-"""Variable value source tests. Covers PLAN.md "Variable-source tests".
+"""Variable value source tests. See README.md "Variable value sources".
 
 Capture tests MUST use a stubbed CommandRunner — never run real subprocesses.
 """

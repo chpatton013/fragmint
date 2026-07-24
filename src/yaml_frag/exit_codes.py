@@ -1,7 +1,7 @@
 """Stable process exit codes.
 
 These values are part of the tool's contract and are asserted by the CLI tests.
-See PLAN.md section "Exit codes". Values may be extended but existing ones must
+See README.md section "Exit codes". Values may be extended but existing ones must
 not be repurposed.
 """
 

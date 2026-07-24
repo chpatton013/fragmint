@@ -5,9 +5,9 @@ operation to the working document in place, recording provenance and (for
 replacements) override warnings via the provided
 :class:`~provenance.ProvenanceTracker`.
 
-Behavior is defined precisely in PLAN.md "Supported merge operations" and
-illustrated in "Merge examples". Do NOT implement any implicit/"smart" merge
-behavior (PLAN.md "Implementation preference"). Summary of the contract:
+Behavior is defined precisely in README.md "Merge operations" and illustrated
+in "Merge examples". Do NOT implement any implicit/"smart" merge behavior
+(README.md "Design principles"). Summary of the contract:
 
 - ``set``: replace value at path, creating missing parent mappings; replacing
   an existing value is allowed and emits an override warning.
@@ -101,9 +101,9 @@ def apply_operation(
 def structurally_equal(a: YamlValue, b: YamlValue) -> bool:
     """Return whether two parsed-YAML values are structurally equal.
 
-    Used for ``deduplicate`` and ``remove-list-items`` matching (PLAN.md
-    "append", "remove-list-items"). Order-sensitive for lists; key-order
-    insensitive for mappings.
+    Used for ``deduplicate`` and ``remove-list-items`` matching (README.md
+    "Merge operations": `append`, `remove-list-items`). Order-sensitive for
+    lists; key-order insensitive for mappings.
     """
     # bool is a subclass of int in Python; treat booleans as their own type
     # so that `True != 1` structurally.
@@ -131,7 +131,7 @@ def apply_set(
     entry: ProvenanceEntry,
     tracker: ProvenanceTracker,
 ) -> None:
-    """Apply a ``set`` operation. See PLAN.md "set"."""
+    """Apply a ``set`` operation. See README.md "Merge operations" (`set`)."""
     existed, _ = pointer.get(document, operation.path)
     pointer.set_(document, operation.path, operation.value)
     tracker.record(operation.path, entry, replaced_existing=existed)
@@ -201,7 +201,7 @@ def apply_merge(
     entry: ProvenanceEntry,
     tracker: ProvenanceTracker,
 ) -> None:
-    """Apply a ``merge`` operation. See PLAN.md "merge"."""
+    """Apply a ``merge`` operation. See README.md "Merge operations" (`merge`)."""
     if not isinstance(operation.value, dict):
         raise MergeConflictError(
             f"{_context(entry)}: merge requires a mapping value at "
@@ -280,7 +280,7 @@ def apply_append(
     entry: ProvenanceEntry,
     tracker: ProvenanceTracker,
 ) -> None:
-    """Apply an ``append`` operation. See PLAN.md "append"."""
+    """Apply an ``append`` operation. See README.md "Merge operations" (`append`)."""
     _apply_list_insert(document, operation, entry=entry, tracker=tracker, prepend=False)
 
 
@@ -291,7 +291,7 @@ def apply_prepend(
     entry: ProvenanceEntry,
     tracker: ProvenanceTracker,
 ) -> None:
-    """Apply a ``prepend`` operation. See PLAN.md "prepend"."""
+    """Apply a ``prepend`` operation. See README.md "Merge operations" (`prepend`)."""
     _apply_list_insert(document, operation, entry=entry, tracker=tracker, prepend=True)
 
 
@@ -302,7 +302,7 @@ def apply_remove(
     entry: ProvenanceEntry,
     tracker: ProvenanceTracker,
 ) -> None:
-    """Apply a ``remove`` operation. See PLAN.md "remove"."""
+    """Apply a ``remove`` operation. See README.md "Merge operations" (`remove`)."""
     existed, _ = pointer.get(document, operation.path)
     if not existed:
         if operation.missing_ok:
@@ -322,7 +322,7 @@ def apply_remove_list_items(
     entry: ProvenanceEntry,
     tracker: ProvenanceTracker,
 ) -> None:
-    """Apply a ``remove-list-items`` operation. See PLAN.md "remove-list-items"."""
+    """Apply a ``remove-list-items`` operation. See README.md "Merge operations" (`remove-list-items`)."""
     if not isinstance(operation.value, list):
         raise MergeConflictError(
             f"{_context(entry)}: remove-list-items requires a list value at "
@@ -376,7 +376,8 @@ def apply_assert(
 ) -> None:
     """Evaluate an ``assert`` operation without mutating ``document``.
 
-    Supported forms (PLAN.md "assert"): ``equals``, ``exists: true|false``,
+    Supported forms (README.md "Merge operations" (`assert`)): ``equals``,
+    ``exists: true|false``,
     and ``type: mapping|list|string|integer|boolean``. Raise
     :class:`~yaml_frag.errors.AssertionFailedError` on failure with
     the path and expectation in the message.

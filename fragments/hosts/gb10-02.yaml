@@ -5,7 +5,7 @@ fragment:
 
 # See hosts/gb10-01. gb10-02 should differ from gb10-01 only in host-specific
 # inventory variables unless it explicitly selects different fragments
-# (PLAN.md "Snapshot tests").
+# (see tests/test_render.py's snapshot tests).
 operations:
   - op: assert
     path: /autoinstall/storage/layout/name
