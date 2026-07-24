@@ -3,8 +3,12 @@
 #
 # This is the example autoinstall project. A "target" is any named thing you
 # render a document for; here they happen to be machines. Fragment paths are
-# arbitrary — the tool imposes no category structure. Precedence is positional:
-# the resolved fragment list (defaults -> groups -> target) is applied in order.
+# arbitrary — the tool imposes no category structure. Each layer declares its
+# fragment contribution per OUTPUT (this project has `user-data` and
+# `meta-data`, per yaml-frag.yaml). Precedence is positional within each
+# output: the resolved fragment list (defaults -> groups -> target) is applied
+# in order. Variables are NOT per-output — they're shared across every output
+# a target produces.
 version: 1
 
 defaults:
@@ -14,48 +18,67 @@ defaults:
     locale: en_US.UTF-8
     keyboard_layout: us
 
-  fragments:
-    - autoinstall/base
-    - autoinstall/default-user
-    - ubuntu-24.04
+  outputs:
+    user-data:
+      fragments:
+        - autoinstall/base
+        - autoinstall/default-user
+        - ubuntu-24.04
+    # Shared by every target: cloud-init instance-id/local-hostname only need
+    # identity_hostname, which every target defines.
+    meta-data:
+      fragments:
+        - meta/instance-id
 
 groups:
   gb10:
     variables:
       hardware_model: gb10
-    fragments:
-      - hardware/gb10
+    outputs:
+      user-data:
+        fragments:
+          - hardware/gb10
 
   generic_vm:
     variables:
       hardware_model: generic-vm
-    fragments:
-      - hardware/generic-vm
+    outputs:
+      user-data:
+        fragments:
+          - hardware/generic-vm
 
   general_servers:
-    fragments:
-      - roles/general-server
+    outputs:
+      user-data:
+        fragments:
+          - roles/general-server
 
   proxmox_hosts:
-    fragments:
-      - roles/proxmox-host
+    outputs:
+      user-data:
+        fragments:
+          - roles/proxmox-host
 
   docker_hosts:
-    fragments:
-      - roles/docker-host
+    outputs:
+      user-data:
+        fragments:
+          - roles/docker-host
 
 targets:
-  # Each target ends its fragment list with autoinstall/checks so the
-  # structural assertions run against the fully composed document. This is how
-  # document-specific validation is expressed now — via fragments, not built
-  # into the renderer.
+  # Each target ends its user-data fragment list with autoinstall/checks so
+  # the structural assertions run against the fully composed document. This is
+  # how document-specific validation is expressed now — via fragments, not
+  # built into the renderer.
   gb10-01:
     groups:
       - gb10
       - general_servers
-    fragments:
-      - hosts/gb10-01
-      - autoinstall/checks
+    outputs:
+      user-data:
+        fragments:
+          - hosts/gb10-01
+          - autoinstall/checks
     variables:
       identity_hostname: gb10-01
       # Computed at render time: feed the plaintext password secret to
@@ -71,9 +94,11 @@ targets:
     groups:
       - gb10
       - general_servers
-    fragments:
-      - hosts/gb10-02
-      - autoinstall/checks
+    outputs:
+      user-data:
+        fragments:
+          - hosts/gb10-02
+          - autoinstall/checks
     variables:
       identity_hostname: gb10-02
       identity_password_hash:
@@ -86,9 +111,11 @@ targets:
     groups:
       - generic_vm
       - general_servers
-    fragments:
-      - hosts/generic-vm-01
-      - autoinstall/checks
+    outputs:
+      user-data:
+        fragments:
+          - hosts/generic-vm-01
+          - autoinstall/checks
     variables:
       identity_hostname: generic-vm-01
       identity_password_hash:

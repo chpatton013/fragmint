@@ -4,13 +4,17 @@ See README.md "Authoring inventory", "Fragment order", "Variable precedence",
 "Secrets", and "Validation".
 
 Responsibilities:
-1. Parse the inventory YAML into an :class:`~models.Inventory`.
+1. Parse the inventory YAML into an :class:`~models.Inventory`. Each of
+   ``defaults``/a group/a target declares its own per-output fragment
+   contribution under an ``outputs:`` map (output name -> ``{fragments: [...]}``);
+   output names are project-defined and not validated against the project
+   config here (that cross-file check happens in :mod:`render`, which has both).
 2. Validate it against ``schemas/inventory.schema.json`` and the structural
    rules in README.md (unique target/group names, referenced groups exist,
    fragments are lists of strings, variables are mappings, order preserved, no
    group cycles if nested groups are added).
 3. Resolve a single target into a :class:`~models.ResolvedTarget` with the
-   final ordered fragment list and fully layered variable map.
+   final ordered per-output fragment lists and fully layered variable map.
 
 This module must contain NO domain-specific knowledge (README.md "Design
 principles": separation of data and rendering logic).
@@ -24,8 +28,26 @@ from typing import Any, cast
 import jsonschema
 
 from .errors import InventoryError, UnknownTargetError
-from .models import GroupDefinition, Inventory, ResolvedTarget, SecretStore, TargetDefinition, Variables
+from .models import (
+    GroupDefinition,
+    Inventory,
+    OutputFragments,
+    ResolvedTarget,
+    SecretStore,
+    TargetDefinition,
+    Variables,
+)
 from .yamlio import load_file
+
+
+def _parse_output_fragments(raw: dict[str, Any] | None) -> OutputFragments:
+    """Parse an ``outputs:`` block (defaults/group/target) into name ->
+    ordered fragment tuple."""
+    result: OutputFragments = {}
+    for output_name, output_raw in (raw or {}).items():
+        output_raw = output_raw or {}
+        result[output_name] = tuple(output_raw.get("fragments", []) or [])
+    return result
 
 
 def _schema_path(name: str) -> Path:
@@ -70,7 +92,7 @@ def load_inventory(path: Path) -> Inventory:
 
     defaults_raw = doc.get("defaults", {}) or {}
     default_variables: Variables = dict(defaults_raw.get("variables", {}) or {})
-    default_fragments: tuple[str, ...] = tuple(defaults_raw.get("fragments", []) or [])
+    default_output_fragments = _parse_output_fragments(defaults_raw.get("outputs"))
 
     groups: dict[str, GroupDefinition] = {}
     for name, group_raw in (doc.get("groups", {}) or {}).items():
@@ -78,7 +100,7 @@ def load_inventory(path: Path) -> Inventory:
         groups[name] = GroupDefinition(
             name=name,
             variables=dict(group_raw.get("variables", {}) or {}),
-            fragments=tuple(group_raw.get("fragments", []) or []),
+            output_fragments=_parse_output_fragments(group_raw.get("outputs")),
         )
 
     targets: dict[str, TargetDefinition] = {}
@@ -95,14 +117,14 @@ def load_inventory(path: Path) -> Inventory:
         targets[name] = TargetDefinition(
             name=name,
             groups=target_groups,
-            fragments=tuple(target_raw.get("fragments", []) or []),
+            output_fragments=_parse_output_fragments(target_raw.get("outputs")),
             variables=dict(target_raw.get("variables", {}) or {}),
         )
 
     return Inventory(
         version=version,
         default_variables=default_variables,
-        default_fragments=default_fragments,
+        default_output_fragments=default_output_fragments,
         groups=groups,
         targets=targets,
     )
@@ -114,15 +136,20 @@ def resolve_target(
     *,
     cli_variables: Variables | None = None,
 ) -> ResolvedTarget:
-    """Resolve one target's final fragments and (still-unresolved) variables.
+    """Resolve one target's final per-output fragments and (still-unresolved)
+    variables.
 
-    Fragment order (README.md "Fragment order") — precedence is positional:
-        1. inventory ``defaults.fragments``
-        2. each group's fragments, in the target's group order
-        3. target ``fragments``
-    Group and fragment order MUST be preserved (never alphabetized).
+    Fragment order, per output (README.md "Fragment order") — precedence is
+    positional:
+        1. inventory ``defaults.outputs.<name>.fragments``
+        2. each group's ``outputs.<name>.fragments``, in the target's group order
+        3. target ``outputs.<name>.fragments``
+    Group and fragment order MUST be preserved (never alphabetized). An output
+    name that no layer contributes fragments to is omitted from the result
+    entirely — that output is simply not produced for this target.
 
-    Variable precedence (README.md "Variable precedence"), later wins:
+    Variable precedence (README.md "Variable precedence"), later wins, and is
+    NOT per-output (variables are shared across all of a target's outputs):
         1. inventory ``defaults.variables``
         2. group variables, in target group order
         3. target variables
@@ -141,7 +168,9 @@ def resolve_target(
     if target is None:
         raise UnknownTargetError(f"unknown target: {target_name!r}")
 
-    fragments: list[str] = list(inventory.default_fragments)
+    output_fragments: dict[str, list[str]] = {
+        name: list(fragments) for name, fragments in inventory.default_output_fragments.items()
+    }
     variables: Variables = dict(inventory.default_variables)
 
     for group_name in target.groups:
@@ -150,10 +179,12 @@ def resolve_target(
             raise InventoryError(
                 f"target {target_name!r} references undefined group {group_name!r}"
             )
-        fragments.extend(group.fragments)
+        for output_name, fragments in group.output_fragments.items():
+            output_fragments.setdefault(output_name, []).extend(fragments)
         variables.update(group.variables)
 
-    fragments.extend(target.fragments)
+    for output_name, fragments in target.output_fragments.items():
+        output_fragments.setdefault(output_name, []).extend(fragments)
     variables.update(target.variables)
 
     if cli_variables:
@@ -162,7 +193,9 @@ def resolve_target(
     return ResolvedTarget(
         name=target_name,
         groups=target.groups,
-        fragments=tuple(fragments),
+        output_fragments={
+            name: tuple(fragments) for name, fragments in output_fragments.items() if fragments
+        },
         variables=variables,
     )
 

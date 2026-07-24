@@ -78,15 +78,17 @@ directory*, not the caller's working directory (see "Project configuration"
 below) — that's what makes the project directory portable and relocatable.
 
 This repository ships one such project, the Ubuntu autoinstall example, under
-`example/`:
+`example/`. It declares two named outputs — `user-data` and `meta-data` — to
+demonstrate multi-file output (see "Project configuration" and "Fragment
+order" below):
 
 ```
 example/
-├── yaml-frag.yaml   Project configuration (input locations, output, validators).
+├── yaml-frag.yaml   Project configuration (input locations, named outputs, validators).
 ├── inventory/       Target/group/default definitions (targets.yaml) + secrets.example.yaml.
 ├── fragments/       Reusable, composable fragments under any nested layout.
 ├── templates/       Output templates (e.g. the #cloud-config wrapper).
-└── rendered/        Output, per the configured path pattern (git-ignored).
+└── rendered/        Output, per target per output's configured path pattern (git-ignored).
 ```
 
 `fragments/` in particular is entirely up to the project: fragments may live
@@ -140,9 +142,10 @@ operation — but never the value of a secret or a secret-sourced argument.
 ## Project configuration
 
 `yaml-frag.yaml` (default name, overridable with `--config`) adapts the
-generic renderer to a use case. It declares default input locations, how
-output is written (path pattern + optional text template + optional document
-schema + default validators), and named validators:
+generic renderer to a use case. It declares default input locations, one or
+more **named outputs** — each with its own path pattern + optional text
+template + optional document schema + default validators — and named
+validators:
 
 ```yaml
 version: 1
@@ -151,20 +154,29 @@ version: 1
 inventory: inventory/targets.yaml
 fragments_dir: fragments
 
-# How each target's rendered document is written.
-output:
-  # Destination path pattern. "{target}" is substituted with the target name.
-  # Must contain "{target}" when rendering more than one target.
-  path: "rendered/{target}/user-data"
-  # Optional text template. The serialized YAML replaces the literal token
-  # "{{ document }}" in this file. If omitted, the serialized YAML is written
-  # verbatim. This is how the autoinstall project adds the "#cloud-config"
-  # header — see templates/user-data.tmpl.
-  template: templates/user-data.tmpl
-  # Optional JSON schema the rendered document is validated against.
-  schema: null
-  # Named validators (see below) run by default for this output.
-  validators: []
+# One or more named outputs. A target produces exactly the outputs its
+# resolved fragments are non-empty for (see "Fragment order" — routing is
+# declared per output in the inventory, not here or in fragments).
+outputs:
+  user-data:
+    # Destination path pattern. "{target}" is substituted with the target name.
+    # Must contain "{target}" when rendering more than one target.
+    path: "rendered/{target}/user-data"
+    # Optional text template. The serialized YAML replaces the literal token
+    # "{{ document }}" in this file. If omitted, the serialized YAML is
+    # written verbatim. This is how the autoinstall project adds the
+    # "#cloud-config" header — see templates/user-data.tmpl.
+    template: templates/user-data.tmpl
+    # Optional JSON schema the rendered document is validated against.
+    schema: null
+    # Named validators (see below) run by default for this output.
+    validators: []
+    # The output implied by e.g. `--stdout` when a target produces more than
+    # one output and no `--only` is given. At most one output may set this.
+    default: true
+
+  meta-data:
+    path: "rendered/{target}/meta-data"
 
 # Named validators, selected with --validator NAME. Each runs an external
 # command against the rendered output file; a nonzero exit is a failure.
@@ -173,27 +185,37 @@ validators:
     command: [python3, tools/validate-autoinstall-user-data.py]
 ```
 
+`outputs` must declare at least one entry. When there's exactly one, it's the
+implicit default even without `default: true`; with several, at most one may
+set `default: true` (more than one is a config error), and with several but
+none marked, there's no implicit default — commands that need exactly one
+output (like `--stdout` with no `--only`) then require `--only NAME`.
+
 Everything domain-specific (the `#cloud-config` header, the Subiquity
 validator, any document schema) lives here or in fragments — never in the
 renderer.
 
-**Portability.** Every path above (`inventory`, `fragments_dir`,
-`output.path`, `output.template`, `output.schema`) is resolved **relative to
-the directory containing this config file**, never the caller's current
-working directory. An already-absolute path is left unchanged. This is what
-lets a project directory — like `example/` in this repository — be self-
-contained and relocatable: it works identically whether you run
-`yaml-frag render gb10-01 --config example/yaml-frag.yaml` from the repo root,
-`yaml-frag render gb10-01 --config yaml-frag.yaml` from inside `example/`, or
-copy `example/` somewhere else entirely and invoke it from there. `--inventory`
-and `--fragments-dir` CLI overrides are the exception: given directly on the
+**Portability.** Every path above (`inventory`, `fragments_dir`, and each
+output's `path`/`template`/`schema`) is resolved **relative to the directory
+containing this config file**, never the caller's current working directory.
+An already-absolute path is left unchanged. This is what lets a project
+directory — like `example/` in this repository — be self-contained and
+relocatable: it works identically whether you run `yaml-frag render gb10-01
+--config example/yaml-frag.yaml` from the repo root, `yaml-frag render
+gb10-01 --config yaml-frag.yaml` from inside `example/`, or copy `example/`
+somewhere else entirely and invoke it from there. `--inventory` and
+`--fragments-dir` CLI overrides are the exception: given directly on the
 command line, they resolve relative to the CWD like any ordinary CLI argument.
 
 ## Authoring inventory
 
 `inventory/targets.yaml` (paths below are relative to the project directory,
 e.g. `example/inventory/targets.yaml`) declares `defaults`, `groups`, and
-`targets`:
+`targets`. **Which fragments feed which output is declared here, per output**
+— `outputs` at each layer maps an output name (declared in the project
+config's `outputs`) to that layer's ordered fragment contribution. Variables
+are *not* per-output — they're a single shared layer across all of a target's
+outputs.
 
 ```yaml
 version: 1
@@ -204,29 +226,41 @@ defaults:
     ssh_import_id: gh:chpatton013
     locale: en_US.UTF-8
     keyboard_layout: us
-  fragments:
-    - autoinstall/base
-    - autoinstall/default-user
-    - ubuntu-24.04
+  outputs:
+    user-data:
+      fragments:
+        - autoinstall/base
+        - autoinstall/default-user
+        - ubuntu-24.04
+    # Shared by every target that defines identity_hostname.
+    meta-data:
+      fragments:
+        - meta/instance-id
 
 groups:
   gb10:
     variables:
       hardware_model: gb10
-    fragments:
-      - hardware/gb10
+    outputs:
+      user-data:
+        fragments:
+          - hardware/gb10
   general_servers:
-    fragments:
-      - roles/general-server
+    outputs:
+      user-data:
+        fragments:
+          - roles/general-server
 
 targets:
   gb10-01:
     groups:
       - gb10
       - general_servers
-    fragments:
-      - hosts/gb10-01
-      - autoinstall/checks
+    outputs:
+      user-data:
+        fragments:
+          - hosts/gb10-01
+          - autoinstall/checks
     variables:
       identity_hostname: gb10-01
       identity_password_hash: "$6$example-salt$example-hash"
@@ -235,21 +269,24 @@ targets:
 
 A **target** is any named thing you want to render a document for (a machine,
 an environment, a service — the renderer does not care). Groups are an
-optional, generic reuse mechanism: a named bundle of variables and fragments a
-target can pull in.
+optional, generic reuse mechanism: a named bundle of variables and per-output
+fragments a target can pull in.
 
 ### Fragment order
 
-The final ordered fragment list for a target is the concatenation of:
+For each output name, the final ordered fragment list for a target is the
+concatenation of:
 
-1. inventory `defaults.fragments`;
-2. for each group the target lists, that group's fragments, in the target's
-   group order;
-3. the target's own `fragments`.
+1. inventory `defaults.outputs.<name>.fragments`;
+2. for each group the target lists, that group's `outputs.<name>.fragments`,
+   in the target's group order;
+3. the target's own `outputs.<name>.fragments`.
 
 Precedence is purely positional: entries later in this resolved list override
-earlier ones. The renderer never reorders. For the example above, the
-resolved order is:
+earlier ones, within that output. The renderer never reorders. An output name
+that no layer contributes fragments to is simply **not produced** for that
+target — there's no empty file. For the example above, `gb10-01`'s resolved
+`user-data` fragment order is:
 
 ```text
 autoinstall/base
@@ -260,6 +297,9 @@ roles/general-server
 hosts/gb10-01
 autoinstall/checks
 ```
+
+and its `meta-data` order is just `meta/instance-id` (contributed once, by
+`defaults`).
 
 ### Variable precedence
 
@@ -570,41 +610,52 @@ internals. Only a small set of safe filters is exposed: `default`, `lower`,
 
 For each requested target:
 
-1. Load the project configuration.
+1. Load the project configuration (its named `outputs`).
 2. Load and validate the inventory.
-3. Resolve defaults, groups, and the target definition.
-4. Build the ordered variable map, then resolve variable value sources
-   (secrets/captures).
-5. Build the ordered fragment list.
-6. Load every referenced fragment and validate it against the fragment
-   schema.
-7. Start with an empty document.
-8. For each fragment, in order: verify required variables; render templates
-   using the resolved variable map; apply operations in listed order,
-   recording provenance for every changed path; evaluate `assert` operations
-   as they're encountered.
-9. Run generic structural validation (unresolved-marker check; optional
-   project-supplied document schema).
-10. Serialize deterministic YAML.
-11. If the output has a template, inject the serialized YAML into it
-    (replacing `{{ document }}`); otherwise use the serialized YAML directly.
-12. Write the result to the configured output path (`{target}` substituted),
-    using a temporary file and atomic rename.
-13. Run any selected validators against the written output.
+3. Resolve defaults, groups, and the target definition into a per-output
+   fragment list (README.md "Fragment order") and one shared, ordered variable
+   map. Every output name the inventory produces for this target must exist in
+   the project config's `outputs` (a config error otherwise).
+4. Resolve variable value sources (secrets/captures) once — shared across
+   every output this target produces.
+5. For each output the target produces, independently:
+   1. Load every referenced fragment and validate it against the fragment
+      schema.
+   2. Start with an empty document.
+   3. For each fragment, in order: verify required variables; render
+      templates using the resolved variable map; apply operations in listed
+      order, recording provenance for every changed path; evaluate `assert`
+      operations as they're encountered.
+   4. Run generic structural validation (unresolved-marker check; optional
+      output-specific document schema).
+   5. Serialize deterministic YAML.
+   6. If the output has a template, inject the serialized YAML into it
+      (replacing `{{ document }}`); otherwise use the serialized YAML
+      directly.
+   7. Write the result to that output's configured path (`{target}`
+      substituted), using a temporary file and atomic rename.
+   8. Run any selected validators against the written output.
 
-The renderer creates exactly the file(s) the project configures — it never
-forces companion files like a NoCloud `meta-data`.
+An output with no contributing fragments for a target is never produced for
+that target — no empty file is written. The renderer creates exactly the
+output file(s) the project configures for a given target — it never forces
+companion files beyond what the inventory routes fragments to.
 
 ## Provenance and `explain`
 
-The renderer tracks which fragment and operation last modified each path:
+The renderer tracks which fragment and operation last modified each path,
+independently per output. `explain` prints one `== <output name> ==` section
+per output the target produces (or just the one named by `--only`):
 
 ```bash
 yaml-frag explain gb10-01
 yaml-frag explain gb10-01 /autoinstall/storage
+yaml-frag explain gb10-01 --only meta-data
 ```
 
 ```text
+== user-data ==
+
 /autoinstall/kernel/package
   value: linux-generic-hwe-24.04
   source: hardware/gb10 operation 0
@@ -612,15 +663,21 @@ yaml-frag explain gb10-01 /autoinstall/storage
 /autoinstall/user-data/packages
   contributors:
     - roles/general-server operation 0
+
+== meta-data ==
+
+/instance-id
+  value: gb10-01
+  source: meta/instance-id operation 0
 ```
 
 ## Conflict reporting
 
 When a `set` (or a `merge`'s scalar replacement) replaces an existing value,
-a warning is emitted by default:
+a warning is emitted by default, prefixed with the output name it occurred in:
 
 ```text
-warning: hardware/gb10 operation 0 replaced /autoinstall/kernel
+[user-data] warning: hardware/gb10 operation 0 replaced /autoinstall/kernel
   previous source: ubuntu-24.04
   new source: hardware/gb10
 ```
@@ -657,11 +714,11 @@ built into the renderer; the last two are supplied by the project.
    validated against `schemas/project.schema.json`; secrets against
    `schemas/secrets.schema.json`.
 2. **Generic rendered-document validation (built in).** Only document-agnostic
-   checks: reject unresolved template markers (text containing `{{` or `{%`);
-   if `output.schema` is set, validate the rendered document against that
-   JSON schema. The renderer contains **no** hard-coded structural
-   expectations (no `autoinstall.version`, no required `identity`/`ssh`/
-   `storage`/`network` rules).
+   checks, run independently per output: reject unresolved template markers
+   (text containing `{{` or `{%`); if that output's `schema` is set, validate
+   its rendered document against that JSON schema. The renderer contains
+   **no** hard-coded structural expectations (no `autoinstall.version`, no
+   required `identity`/`ssh`/`storage`/`network` rules).
 3. **Document assertions (project supplied, via fragments).** Any
    document-specific structural requirement is expressed as `assert`
    operations in fragments. The example project ships an
@@ -697,14 +754,14 @@ serializer.
 ## CLI usage
 
 ```bash
-yaml-frag render gb10-01                 # -> configured output path
-yaml-frag render gb10-01 --stdout        # print output to stdout only
+yaml-frag render gb10-01                 # -> every output the target produces
+yaml-frag render gb10-01 --only meta-data --stdout   # print one output only
 yaml-frag render gb10-01 --validator subiquity
-yaml-frag render-all                     # render every target
-yaml-frag validate gb10-01               # render in memory + validate
+yaml-frag render-all                     # render every target, every output
+yaml-frag validate gb10-01               # render in memory + validate every output
 yaml-frag validate-all
-yaml-frag explain gb10-01 [/path]        # where did each value come from?
-yaml-frag inspect gb10-01                # resolved groups/fragments/vars (redacted)
+yaml-frag explain gb10-01 [/path]        # where did each value come from? (all outputs, or --only)
+yaml-frag inspect gb10-01                # resolved groups/per-output fragments/vars (redacted)
 yaml-frag list targets|fragments|groups
 ```
 
@@ -712,19 +769,38 @@ All of the above assume `--config example/yaml-frag.yaml` (or that you've `cd`'d
 into `example/` and use the default). Every command accepts `--config PATH`
 (default `yaml-frag.yaml`). Common
 options: `--inventory`, `--fragments-dir`, `--output` (render only),
-`--secrets`, `--var KEY=VALUE`, `--validator NAME`, `--dry-run`,
-`--quiet-overrides`, `--no-validate`. Rendered output goes to stdout only
-with `--stdout`; all diagnostics go to stderr. `render-all`/`validate-all`
+`--secrets`, `--var KEY=VALUE`, `--validator NAME`, `--only NAME`, `--dry-run`,
+`--quiet-overrides`, `--no-validate`. `render-all`/`validate-all`
 process every target in inventory order and exit nonzero if any target
 fails, without leaving a partially written output file for a failed target
 (atomic temp-file + rename).
 
-`inspect` shows resolved groups, fragment order, and variables, redacting any
-variable whose name contains `password`, `secret`, `token`, `private`, or
-`credential`, and any variable defined via a `secret` or `capture` source
-regardless of name (shown as a non-executing description, e.g. `<capture:
-openssl passwd -6 -stdin>`). Pass `--show-secrets` to reveal literal values
-(captures are still never executed for inspection).
+**Multi-output selection (`render`, `validate`, `explain`).** With no
+`--only`, `render`/`validate`/`explain` act on every output the target
+produces. `--only NAME` scopes any of them to a single named output (an
+unknown name, or one the target doesn't produce, is a config error). Two
+flags can only ever apply to one output at a time:
+
+- `--stdout` prints one output's text. With `--only`, that's the one printed.
+  Without it: a target producing exactly one output prints that one; a
+  target producing several falls back to the config's `default_output`
+  (README.md "Project configuration"); with several and no default, it's a
+  config error listing the available output names.
+- `--output PATH` overrides the destination path for one output. It requires
+  either `--only` or a target that produces exactly one output — with
+  several and no `--only`, it's a config error (there's no default fallback
+  here, unlike `--stdout`, since silently picking a path for the "default"
+  output while ignoring the others would be surprising for a file-write).
+
+All diagnostics (warnings, errors, progress) go to stderr regardless of
+`--stdout`.
+
+`inspect` shows resolved groups, per-output fragment order, and variables,
+redacting any variable whose name contains `password`, `secret`, `token`,
+`private`, or `credential`, and any variable defined via a `secret` or
+`capture` source regardless of name (shown as a non-executing description,
+e.g. `<capture: openssl passwd -6 -stdin>`). Pass `--show-secrets` to reveal
+literal values (captures are still never executed for inspection).
 
 ### Exit codes
 
@@ -736,16 +812,25 @@ openssl passwd -6 -stdin>`). Pass `--show-secrets` to reveal literal values
 ## Example project: Ubuntu autoinstall
 
 The repository ships a complete example that renders Ubuntu 24.04 autoinstall
-`user-data`, demonstrating that all autoinstall specifics live in data:
+`user-data` plus a cloud-init `meta-data` file per target, demonstrating both
+that all autoinstall specifics live in data and how multi-output routing
+works in practice:
 
-- `example/yaml-frag.yaml` sets `output.template:
-  templates/user-data.tmpl` (which adds the `#cloud-config` header) and
-  `output.path: rendered/{target}/user-data`, and declares the optional
-  `subiquity` validator.
+- `example/yaml-frag.yaml` declares two outputs: `user-data` (`template:
+  templates/user-data.tmpl`, which adds the `#cloud-config` header; `path:
+  rendered/{target}/user-data`; marked `default: true`; declares the optional
+  `subiquity` validator) and `meta-data` (`path:
+  rendered/{target}/meta-data`, no template).
+- `example/inventory/targets.yaml` routes fragments to each output under
+  `outputs.<name>.fragments` at every layer; `outputs.meta-data.fragments:
+  [meta/instance-id]` is declared once, in `defaults`, so every target gets
+  it.
 - `example/fragments/autoinstall/base.yaml`, `default-user.yaml`, and
   `checks.yaml`, `example/fragments/ubuntu-24.04.yaml`,
   `example/fragments/hardware/*`, `example/fragments/roles/*`, and
-  `example/fragments/hosts/*` build and assert the document.
+  `example/fragments/hosts/*` build and assert the `user-data` document;
+  `example/fragments/meta/instance-id.yaml` builds the `meta-data` document
+  (just `instance-id` and `local-hostname`, both from `identity_hostname`).
 - Each target's `identity_password_hash` is a `capture` source that runs
   `openssl passwd -6` over the plaintext password held in the secret store
   (`example/inventory/secrets.example.yaml` shows the shape).
@@ -813,18 +898,17 @@ autoinstall:
 
 Deliberately not implemented: a web interface; dynamic Python plugins;
 arbitrary template code execution; array-index mutation; semantic merging of
-list entries; key-aware list merges; multiple output files per target;
-variables that reference other variables; automatic hardware discovery;
-PXE/TFTP/DHCP configuration; deployment to HTTP servers; secret-manager
-integration (the secret store is a plain file); reimplementing any full
-document schema (e.g. Subiquity); running Ansible; installing Ubuntu. The
-renderer's job is to produce correct, inspectable YAML artifacts.
+list entries; key-aware list merges; variables that reference other
+variables; automatic hardware discovery; PXE/TFTP/DHCP configuration;
+deployment to HTTP servers; secret-manager integration (the secret store is a
+plain file); reimplementing any full document schema (e.g. Subiquity);
+running Ansible; installing Ubuntu. The renderer's job is to produce correct,
+inspectable YAML artifacts.
 
-Room for future extension: multiple named outputs per target; per-target
-metadata files; PXE/iPXE script generation; publishing to an HTTP directory;
-secret retrieval from a password manager; target enrollment states;
-additional built-in validators; schema-aware validation for multiple document
-families; encrypted outputs; fragment deprecation warnings; fragment
+Room for future extension: PXE/iPXE script generation; publishing to an HTTP
+directory; secret retrieval from a password manager; target enrollment
+states; additional built-in validators; schema-aware validation for multiple
+document families; encrypted outputs; fragment deprecation warnings; fragment
 dependency declarations; optional fragment conditions.
 
 ## Development

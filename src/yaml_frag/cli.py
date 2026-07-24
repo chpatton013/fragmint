@@ -31,7 +31,7 @@ from . import yamlio
 from .config import DEFAULT_CONFIG_PATH
 from .errors import ConfigError, YamlFragError
 from .exit_codes import ExitCode
-from .models import ProjectConfig, Variables, YamlValue
+from .models import OutputSpec, ProjectConfig, RenderedOutput, Variables, YamlValue
 
 
 def _parse_var(ctx: click.Context, param: click.Parameter, values: tuple[str, ...]) -> dict[str, str]:
@@ -64,21 +64,79 @@ def _resolve_inputs(
     return resolved_inventory, resolved_fragments
 
 
-def _emit_overrides(overrides: tuple[str, ...], *, quiet: bool) -> None:
+def _emit_overrides(output_name: str, overrides: tuple[str, ...], *, quiet: bool) -> None:
     if quiet:
         return
     for warning in overrides:
-        click.echo(warning, err=True)
+        click.echo(f"[{output_name}] {warning}", err=True)
 
 
 def _run_selected_validators(
     config: ProjectConfig,
+    output: OutputSpec,
     output_path: Path,
     requested: tuple[str, ...],
 ) -> None:
-    for name in config_mod.select_validators(config, requested):
+    for name in config_mod.select_validators(config, output, requested):
         spec = config.validators[name]
         validation_mod.run_validator(output_path, spec.command)
+
+
+def _check_only_output(config: ProjectConfig, only: str | None) -> None:
+    """Raise :class:`ConfigError` if ``--only`` names an output the project
+    configuration doesn't declare."""
+    if only is not None and only not in config.outputs:
+        raise ConfigError(f"unknown output {only!r} requested")
+
+
+def _select_output_names(
+    produced: dict[str, RenderedOutput],
+    only: str | None,
+    target: str,
+) -> list[str]:
+    """Which output names a command should act on.
+
+    ``only`` (already validated against ``config.outputs`` by
+    :func:`_check_only_output`) restricts to a single output, which must be one
+    the target actually produced. With no ``--only``, act on every output the
+    target produced.
+    """
+    if only is None:
+        return list(produced)
+    if only not in produced:
+        raise ConfigError(f"{target!r} does not produce output {only!r}")
+    return [only]
+
+
+def _select_single_output(
+    config: ProjectConfig,
+    produced: dict[str, RenderedOutput],
+    only: str | None,
+    target: str,
+    *,
+    use_default: bool,
+) -> str:
+    """Resolve exactly one output name for commands that can only act on one
+    at a time (``--stdout``, ``--output PATH``).
+
+    ``only`` takes precedence. Otherwise, a target that produced exactly one
+    output is unambiguous. With more than one produced output and no
+    ``--only``: fall back to ``config.default_output`` when ``use_default`` is
+    set (used by ``--stdout``); otherwise (``--output PATH``) require
+    ``--only`` explicitly. Raise :class:`ConfigError` naming the available
+    outputs when none of the above resolves it.
+    """
+    if only is not None:
+        return only
+    if len(produced) == 1:
+        return next(iter(produced))
+    if use_default and config.default_output is not None and config.default_output in produced:
+        return config.default_output
+    available = ", ".join(sorted(produced))
+    hint = " (or mark one output `default: true`)" if use_default else ""
+    raise ConfigError(
+        f"{target!r} produces multiple outputs ({available}); specify --only NAME{hint}"
+    )
 
 
 # Shared option decorators. Path defaults are None so the resolved value comes
@@ -127,6 +185,13 @@ _validator_option = click.option(
     help="Run a named validator from the project config. May be repeated. "
     "If omitted, the output's default validators run.",
 )
+_only_option = click.option(
+    "--only",
+    "only_output",
+    default=None,
+    metavar="NAME",
+    help="Scope to a single named output (see project config `outputs`).",
+)
 
 
 @click.group()
@@ -143,8 +208,9 @@ def cli() -> None:
 @_secrets_option
 @_var_option
 @_validator_option
-@click.option("--output", "output_path", type=click.Path(path_type=Path), default=None, help="Override the destination path for this render.")
-@click.option("--stdout", "to_stdout", is_flag=True, help="Print rendered output to stdout instead of writing.")
+@_only_option
+@click.option("--output", "output_path", type=click.Path(path_type=Path), default=None, help="Override the destination path. Requires --only or a target producing exactly one output.")
+@click.option("--stdout", "to_stdout", is_flag=True, help="Print one rendered output to stdout instead of writing (see --only).")
 @click.option("--dry-run", is_flag=True, help="Render and validate but write nothing.")
 @click.option("--quiet-overrides", is_flag=True, help="Suppress override warnings.")
 @click.option("--no-validate", "validate", is_flag=True, default=True, flag_value=False, help="Skip generic validation and validators.")
@@ -156,15 +222,17 @@ def render(
     secrets_path: Path | None,
     cli_variables: dict[str, str],
     validators: tuple[str, ...],
+    only_output: str | None,
     output_path: Path | None,
     to_stdout: bool,
     dry_run: bool,
     quiet_overrides: bool,
     validate: bool,
 ) -> None:
-    """Render one TARGET to its configured output path."""
+    """Render one TARGET, writing every output it produces to its configured path."""
     cfg = config_mod.load_config(config_path)
     inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
+    _check_only_output(cfg, only_output)
 
     result = render_mod.render_target(
         target,
@@ -175,22 +243,36 @@ def render(
         secrets_path=secrets_path,
         validate=validate,
     )
-    _emit_overrides(result.overrides, quiet=quiet_overrides)
-
-    text = render_mod.compose_output(result, cfg.output)
 
     if to_stdout:
+        name = _select_single_output(cfg, result.outputs, only_output, target, use_default=True)
+        rendered = result.outputs[name]
+        _emit_overrides(name, rendered.overrides, quiet=quiet_overrides)
+        text = render_mod.compose_output(rendered, cfg.outputs[name])
         click.echo(text, nl=False)
         return
+
+    selected_names = _select_output_names(result.outputs, only_output, target)
+    if output_path is not None:
+        selected_names = [
+            _select_single_output(cfg, result.outputs, only_output, target, use_default=False)
+        ]
+
+    for name in selected_names:
+        _emit_overrides(name, result.outputs[name].overrides, quiet=quiet_overrides)
 
     if dry_run:
         return
 
-    out_path = config_mod.resolve_output_path(cfg, target, override=output_path)
-    render_mod.write_output(text, out_path)
+    for name in selected_names:
+        rendered = result.outputs[name]
+        output_spec = cfg.outputs[name]
+        text = render_mod.compose_output(rendered, output_spec)
+        out_path = config_mod.resolve_output_path(output_spec, target, override=output_path)
+        render_mod.write_output(text, out_path)
 
-    if validate:
-        _run_selected_validators(cfg, out_path, validators)
+        if validate:
+            _run_selected_validators(cfg, output_spec, out_path, validators)
 
 
 @cli.command("render-all")
@@ -230,12 +312,14 @@ def render_all(
                 secrets_path=secrets_path,
                 validate=validate,
             )
-            _emit_overrides(result.overrides, quiet=quiet_overrides)
-            text = render_mod.compose_output(result, cfg.output)
-            out_path = config_mod.resolve_output_path(cfg, target_name)
-            render_mod.write_output(text, out_path)
-            if validate:
-                _run_selected_validators(cfg, out_path, validators)
+            for name, rendered in result.outputs.items():
+                _emit_overrides(name, rendered.overrides, quiet=quiet_overrides)
+                output_spec = cfg.outputs[name]
+                text = render_mod.compose_output(rendered, output_spec)
+                out_path = config_mod.resolve_output_path(output_spec, target_name)
+                render_mod.write_output(text, out_path)
+                if validate:
+                    _run_selected_validators(cfg, output_spec, out_path, validators)
         except YamlFragError as exc:
             click.echo(f"{target_name}: {exc}", err=True)
             failed.append(target_name)
@@ -254,6 +338,7 @@ def render_all(
 @_secrets_option
 @_var_option
 @_validator_option
+@_only_option
 def validate(
     target: str,
     config_path: Path,
@@ -262,10 +347,13 @@ def validate(
     secrets_path: Path | None,
     cli_variables: dict[str, str],
     validators: tuple[str, ...],
+    only_output: str | None,
 ) -> None:
-    """Render TARGET in memory and validate without writing output."""
+    """Render TARGET in memory and validate every output it produces, without
+    writing anything."""
     cfg = config_mod.load_config(config_path)
     inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
+    _check_only_output(cfg, only_output)
 
     result = render_mod.render_target(
         target,
@@ -276,16 +364,20 @@ def validate(
         secrets_path=secrets_path,
         validate=True,
     )
-    text = render_mod.compose_output(result, cfg.output)
 
-    selected = config_mod.select_validators(cfg, validators)
-    if selected:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir) / "output"
-            render_mod.write_output(text, tmp_path)
-            for name in selected:
-                spec = cfg.validators[name]
-                validation_mod.run_validator(tmp_path, spec.command)
+    for name in _select_output_names(result.outputs, only_output, target):
+        rendered = result.outputs[name]
+        output_spec = cfg.outputs[name]
+        text = render_mod.compose_output(rendered, output_spec)
+
+        selected = config_mod.select_validators(cfg, output_spec, validators)
+        if selected:
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                tmp_path = Path(tmp_dir) / "output"
+                render_mod.write_output(text, tmp_path)
+                for validator_name in selected:
+                    spec = cfg.validators[validator_name]
+                    validation_mod.run_validator(tmp_path, spec.command)
 
 
 @cli.command("validate-all")
@@ -317,15 +409,17 @@ def validate_all(
                 secrets_path=secrets_path,
                 validate=True,
             )
-            text = render_mod.compose_output(result, cfg.output)
-            selected = config_mod.select_validators(cfg, validators)
-            if selected:
-                with tempfile.TemporaryDirectory() as tmp_dir:
-                    tmp_path = Path(tmp_dir) / "output"
-                    render_mod.write_output(text, tmp_path)
-                    for name in selected:
-                        spec = cfg.validators[name]
-                        validation_mod.run_validator(tmp_path, spec.command)
+            for name, rendered in result.outputs.items():
+                output_spec = cfg.outputs[name]
+                text = render_mod.compose_output(rendered, output_spec)
+                selected = config_mod.select_validators(cfg, output_spec, validators)
+                if selected:
+                    with tempfile.TemporaryDirectory() as tmp_dir:
+                        tmp_path = Path(tmp_dir) / "output"
+                        render_mod.write_output(text, tmp_path)
+                        for validator_name in selected:
+                            spec = cfg.validators[validator_name]
+                            validation_mod.run_validator(tmp_path, spec.command)
         except YamlFragError as exc:
             click.echo(f"{target_name}: {exc}", err=True)
             failed.append(target_name)
@@ -344,6 +438,7 @@ def validate_all(
 @_fragments_option
 @_secrets_option
 @_var_option
+@_only_option
 def explain(
     target: str,
     path: str | None,
@@ -352,13 +447,17 @@ def explain(
     fragments_dir: Path | None,
     secrets_path: Path | None,
     cli_variables: dict[str, str],
+    only_output: str | None,
 ) -> None:
     """Show provenance for TARGET, optionally scoped to a single PATH.
 
-    See README.md "Provenance and `explain`" for the expected output format.
+    Prints one section per output the target produces (headed by the output
+    name); use ``--only`` to scope to a single output. See README.md
+    "Provenance and `explain`" for the expected output format.
     """
     cfg = config_mod.load_config(config_path)
     inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
+    _check_only_output(cfg, only_output)
 
     # Redact sources so explain never executes captures or reveals secrets
     # (README.md "Resolution timing"); secret/capture-derived values appear as
@@ -379,24 +478,28 @@ def explain(
             return True
         return doc_path == path or doc_path.startswith(path.rstrip("/") + "/")
 
-    blocks: list[str] = []
-    for doc_path in sorted(result.provenance):
-        if not _in_scope(doc_path):
-            continue
-        entries = result.provenance[doc_path]
-        _, value = pointer_mod.get(result.document, doc_path)
-        lines = [doc_path]
-        if isinstance(value, list):
-            lines.append("  contributors:")
-            for entry in entries:
-                lines.append(f"    - {entry.fragment} operation {entry.operation_index}")
-        else:
-            last = entries[-1]
-            lines.append(f"  value: {value}")
-            lines.append(f"  source: {last.fragment} operation {last.operation_index}")
-        blocks.append("\n".join(lines))
+    sections: list[str] = []
+    for name in _select_output_names(result.outputs, only_output, target):
+        rendered = result.outputs[name]
+        blocks: list[str] = []
+        for doc_path in sorted(rendered.provenance):
+            if not _in_scope(doc_path):
+                continue
+            entries = rendered.provenance[doc_path]
+            _, value = pointer_mod.get(rendered.document, doc_path)
+            lines = [doc_path]
+            if isinstance(value, list):
+                lines.append("  contributors:")
+                for entry in entries:
+                    lines.append(f"    - {entry.fragment} operation {entry.operation_index}")
+            else:
+                last = entries[-1]
+                lines.append(f"  value: {value}")
+                lines.append(f"  source: {last.fragment} operation {last.operation_index}")
+            blocks.append("\n".join(lines))
+        sections.append(f"== {name} ==\n\n" + "\n\n".join(blocks))
 
-    click.echo("\n\n".join(blocks))
+    click.echo("\n\n".join(sections))
 
 
 @cli.command("list")
@@ -446,7 +549,8 @@ def inspect(
     cli_variables: dict[str, str],
     show_secrets: bool,
 ) -> None:
-    """Show resolved groups, fragment order, and (redacted) variables.
+    """Show resolved groups, per-output fragment order, and (redacted)
+    variables.
 
     See README.md "CLI usage".
     """
@@ -461,7 +565,13 @@ def inspect(
     output_doc: dict[str, YamlValue] = {
         "target": resolved.name,
         "groups": list(resolved.groups),
-        "fragments": list(resolved.fragments),
+        "outputs": cast(
+            YamlValue,
+            {
+                name: {"fragments": list(fragments)}
+                for name, fragments in resolved.output_fragments.items()
+            },
+        ),
         "variables": cast(YamlValue, redacted_variables),
     }
     click.echo(yamlio.dump_str(output_doc), nl=False)

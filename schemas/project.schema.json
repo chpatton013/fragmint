@@ -2,14 +2,25 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://example.com/yaml-frag/project.schema.json",
   "title": "yaml-frag project configuration",
-  "description": "Structural schema for yaml-frag.yaml. See README.md 'Project configuration'. Cross-cutting rules (e.g. that {target} appears in output.path when rendering many targets, and that --validator names exist) are enforced in config.py.",
+  "description": "Structural schema for yaml-frag.yaml. See README.md 'Project configuration'. Cross-cutting rules (e.g. that {target} appears in each output's path when rendering many targets, that --validator names exist, at most one output marked default: true, and that inventory-referenced output names exist here) are enforced in config.py/render.py.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "output"],
+  "required": ["version", "outputs"],
   "properties": {
     "version": { "const": 1 },
     "inventory": { "type": "string", "minLength": 1 },
     "fragments_dir": { "type": "string", "minLength": 1 },
+    "outputs": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/output" }
+    },
+    "validators": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/validator" }
+    }
+  },
+  "$defs": {
     "output": {
       "type": "object",
       "additionalProperties": false,
@@ -21,15 +32,10 @@
         "validators": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 }
-        }
+        },
+        "default": { "type": "boolean" }
       }
     },
-    "validators": {
-      "type": "object",
-      "additionalProperties": { "$ref": "#/$defs/validator" }
-    }
-  },
-  "$defs": {
     "validator": {
       "type": "object",
       "additionalProperties": false,

@@ -5,9 +5,10 @@ templating, merge operations, provenance, validation, serialization, and output
 templating. See README.md "Rendering algorithm".
 
 The functions here are pure with respect to the filesystem where practical:
-:func:`render_target` returns a :class:`~models.RenderResult` (in-memory),
-:func:`compose_output` turns it into the final output text, and
-:func:`write_output` handles the atomic on-disk write separately so
+:func:`render_target` returns a :class:`~models.RenderResult` (in-memory,
+one :class:`~models.RenderedOutput` per output the target produces),
+:func:`compose_output` turns a single output's result into final output text,
+and :func:`write_output` handles the atomic on-disk write separately so
 ``validate``/``inspect``/``--stdout`` can render without writing.
 """
 
@@ -24,9 +25,18 @@ from . import sources
 from . import templating
 from . import validation
 from . import yamlio
-from .errors import TemplateRenderError
+from .errors import ConfigError, TemplateRenderError
 from .inventory import load_inventory, load_secret_store, resolve_target
-from .models import OutputSpec, ProjectConfig, ProvenanceEntry, RenderResult, SecretStore, Variables, YamlValue
+from .models import (
+    OutputSpec,
+    ProjectConfig,
+    ProvenanceEntry,
+    RenderedOutput,
+    RenderResult,
+    SecretStore,
+    Variables,
+    YamlValue,
+)
 from .provenance import ProvenanceTracker
 from .sources import CommandRunner
 
@@ -51,24 +61,28 @@ def render_target(
     validate: bool = True,
     redact_sources: bool = False,
 ) -> RenderResult:
-    """Render a single target in memory.
+    """Render a single target's every produced output in memory.
 
     Steps (README.md "Rendering algorithm"):
     1. load + validate inventory;
-    2. resolve defaults/groups/target (fragment order + LAYERED-but-unresolved
-       variable map) via :func:`inventory.resolve_target`;
+    2. resolve defaults/groups/target (per-output fragment order +
+       LAYERED-but-unresolved variable map) via :func:`inventory.resolve_target`;
+       every output name it produces must be declared in ``config.outputs``
+       (raise :class:`~yaml_frag.errors.ConfigError` otherwise);
     3. load the secret store from ``secrets_path`` (empty if not given), then
        resolve every variable source to a concrete value via
        :func:`yaml_frag.sources.resolve_variables` (executing any ``capture``
-       subprocesses through ``runner``, default :class:`~sources.DefaultCommandRunner`);
-    4. load + validate every referenced fragment;
-    5. start from an empty document ``{}``;
-    6. for each fragment in order: check required variables, render templates
-       with the RESOLVED variables, apply operations in listed order while
-       recording provenance, evaluating ``assert`` operations as encountered;
-    7. run generic validation (unresolved-marker check + optional
-       ``config.output.schema``) unless ``validate`` is False;
-    8. return the :class:`~models.RenderResult`.
+       subprocesses through ``runner``, default :class:`~sources.DefaultCommandRunner`)
+       — once, shared across every output;
+    4. for each produced output, independently: load + validate its referenced
+       fragments, start from an empty document ``{}``, and for each fragment in
+       order check required variables, render templates with the RESOLVED
+       variables, apply operations in listed order while recording provenance,
+       evaluating ``assert`` operations as encountered;
+    5. per output, run generic validation (unresolved-marker check + optional
+       ``output.schema``) unless ``validate`` is False;
+    6. return the :class:`~models.RenderResult` holding one
+       :class:`~models.RenderedOutput` per produced output.
 
     ``runner`` is injectable so tests can resolve captures deterministically
     without running real programs. When ``redact_sources`` is true, secret and
@@ -80,6 +94,13 @@ def render_target(
     inventory = load_inventory(inventory_path)
     resolved = resolve_target(inventory, target_name, cli_variables=cli_variables)
 
+    for output_name in resolved.output_fragments:
+        if output_name not in config.outputs:
+            raise ConfigError(
+                f"{target_name}: inventory references output {output_name!r}, "
+                f"which is not declared in the project configuration's `outputs`"
+            )
+
     store = load_secret_store(secrets_path) if secrets_path is not None else SecretStore()
     variables = sources.resolve_variables(
         resolved.variables,
@@ -89,58 +110,64 @@ def render_target(
         redact=redact_sources,
     )
 
-    doc: dict[str, YamlValue] = {}
-    tracker = ProvenanceTracker()
+    outputs: dict[str, RenderedOutput] = {}
 
-    for ref in resolved.fragments:
-        fragment = fragments_mod.load_fragment(fragments_dir, ref)
+    for output_name, refs in resolved.output_fragments.items():
+        doc: dict[str, YamlValue] = {}
+        tracker = ProvenanceTracker()
 
-        for required_var in fragment.required_variables:
-            if required_var not in variables:
-                raise TemplateRenderError(
-                    f"{target_name}: fragment {fragment.name}: missing required "
-                    f"variable {required_var!r}"
-                )
+        for ref in refs:
+            fragment = fragments_mod.load_fragment(fragments_dir, ref)
 
-        for index, op in enumerate(fragment.operations):
-            rendered_value = templating.render_value(
-                op.value,
-                variables,
-                target=target_name,
-                fragment=fragment.name,
-                operation_index=index,
-            )
-            rendered_assertion = {
-                key: templating.render_value(
-                    value,
+            for required_var in fragment.required_variables:
+                if required_var not in variables:
+                    raise TemplateRenderError(
+                        f"{target_name}: fragment {fragment.name}: missing required "
+                        f"variable {required_var!r}"
+                    )
+
+            for index, op in enumerate(fragment.operations):
+                rendered_value = templating.render_value(
+                    op.value,
                     variables,
                     target=target_name,
                     fragment=fragment.name,
                     operation_index=index,
                 )
-                for key, value in op.assertion.items()
-            }
-            rendered_op = replace(op, value=rendered_value, assertion=rendered_assertion)
-            entry = ProvenanceEntry(
-                fragment=fragment.name, operation_index=index, operation=op.op
-            )
-            merge.apply_operation(doc, rendered_op, entry=entry, tracker=tracker)
+                rendered_assertion = {
+                    key: templating.render_value(
+                        value,
+                        variables,
+                        target=target_name,
+                        fragment=fragment.name,
+                        operation_index=index,
+                    )
+                    for key, value in op.assertion.items()
+                }
+                rendered_op = replace(op, value=rendered_value, assertion=rendered_assertion)
+                entry = ProvenanceEntry(
+                    fragment=fragment.name, operation_index=index, operation=op.op
+                )
+                merge.apply_operation(doc, rendered_op, entry=entry, tracker=tracker)
 
-    if validate:
-        validation.check_unresolved_markers(doc)
-        if config.output.schema:
-            validation.validate_against_schema(doc, Path(config.output.schema))
+        if validate:
+            validation.check_unresolved_markers(doc)
+            output_schema = config.outputs[output_name].schema
+            if output_schema:
+                validation.validate_against_schema(doc, Path(output_schema))
 
-    return RenderResult(
-        target=target_name,
-        document=doc,
-        provenance=tracker.entries,
-        overrides=tuple(tracker.overrides),
-    )
+        outputs[output_name] = RenderedOutput(
+            name=output_name,
+            document=doc,
+            provenance=tracker.entries,
+            overrides=tuple(tracker.overrides),
+        )
+
+    return RenderResult(target=target_name, outputs=outputs)
 
 
-def compose_output(result: RenderResult, output: OutputSpec) -> str:
-    """Produce the final output text for a rendered target.
+def compose_output(result: RenderedOutput, output: OutputSpec) -> str:
+    """Produce the final output text for one rendered output.
 
     Serialize ``result.document`` deterministically via
     :func:`yaml_frag.yamlio.dump_str`. If ``output.template`` is set, read that

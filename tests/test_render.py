@@ -13,7 +13,7 @@ import pytest
 
 from yaml_frag import config as config_mod
 from yaml_frag import render as render_mod
-from yaml_frag.errors import AssertionFailedError, ValidationError
+from yaml_frag.errors import AssertionFailedError, ConfigError, ValidationError
 from yaml_frag.models import OutputSpec
 
 SNAPSHOT_TARGETS = ["generic-vm-01", "gb10-01", "gb10-02"]
@@ -43,8 +43,10 @@ def _render(
 
 
 @pytest.mark.parametrize("target", SNAPSHOT_TARGETS)
+@pytest.mark.parametrize("output_name", ["user-data", "meta-data"])
 def test_snapshot_matches_expected(
     target: str,
+    output_name: str,
     config_path: Path,
     inventory_path: Path,
     fragments_dir: Path,
@@ -61,8 +63,8 @@ def test_snapshot_matches_expected(
         secrets_example_path=secrets_example_path,
         stub_runner=stub_runner,
     )
-    text = render_mod.compose_output(result, cfg.output)
-    expected_path = fixtures_dir / "expected" / target / "user-data"
+    text = render_mod.compose_output(result.outputs[output_name], cfg.outputs[output_name])
+    expected_path = fixtures_dir / "expected" / target / output_name
     expected = expected_path.read_bytes()
     assert text.encode("utf-8") == expected
 
@@ -85,10 +87,10 @@ def test_gb10_matches_readme_expected_render(
         secrets_example_path=secrets_example_path,
         stub_runner=stub_runner,
     )
-    text = render_mod.compose_output(result, cfg.output)
+    text = render_mod.compose_output(result.outputs["user-data"], cfg.outputs["user-data"])
 
     assert text.startswith("#cloud-config\n")
-    doc = result.document
+    doc = result.outputs["user-data"].document
     autoinstall = doc["autoinstall"]
     assert autoinstall["version"] == 1
     assert autoinstall["kernel"] == {"package": "linux-generic-hwe-24.04"}
@@ -158,14 +160,15 @@ def test_output_template_prepends_cloud_config_header(
         secrets_example_path=secrets_example_path,
         stub_runner=stub_runner,
     )
-    text = render_mod.compose_output(result, cfg.output)
+    rendered = result.outputs["user-data"]
+    text = render_mod.compose_output(rendered, cfg.outputs["user-data"])
     lines = text.splitlines()
     assert lines[0] == "#cloud-config"
     assert lines[1] == "autoinstall:"
 
     # Without a template, the header is absent.
-    no_template_output = OutputSpec(path=cfg.output.path, template=None)
-    text_no_template = render_mod.compose_output(result, no_template_output)
+    no_template_output = OutputSpec(path=cfg.outputs["user-data"].path, template=None)
+    text_no_template = render_mod.compose_output(rendered, no_template_output)
     assert not text_no_template.startswith("#cloud-config")
     assert text_no_template.startswith("autoinstall:")
 
@@ -194,8 +197,8 @@ def test_gb10_hosts_differ_only_in_host_variables(
         secrets_example_path=secrets_example_path,
         stub_runner=stub_runner,
     )
-    doc_1 = dict(result_1.document)
-    doc_2 = dict(result_2.document)
+    doc_1 = dict(result_1.outputs["user-data"].document)
+    doc_2 = dict(result_2.outputs["user-data"].document)
     assert doc_1["autoinstall"]["identity"]["hostname"] == "gb10-01"
     assert doc_2["autoinstall"]["identity"]["hostname"] == "gb10-02"
 
@@ -218,13 +221,12 @@ def test_fragment_assertion_failure_is_reported(
     inventory_path.write_text(
         """
 version: 1
-defaults:
-  variables: {}
-  fragments: []
 targets:
   broken:
-    fragments:
-      - failing-assert
+    outputs:
+      user-data:
+        fragments:
+          - failing-assert
     variables: {}
 """
     )
@@ -279,11 +281,12 @@ version: 1
 defaults:
   variables:
     echo_var: "{{ nested }}"
-  fragments: []
 targets:
   broken:
-    fragments:
-      - echoes
+    outputs:
+      user-data:
+        fragments:
+          - echoes
     variables: {}
 """
     )
@@ -337,9 +340,107 @@ def test_deterministic_output(
         secrets_example_path=secrets_example_path,
         stub_runner=stub_runner,
     )
-    text_1 = render_mod.compose_output(result_1, cfg.output)
-    text_2 = render_mod.compose_output(result_2, cfg.output)
+    text_1 = render_mod.compose_output(result_1.outputs["user-data"], cfg.outputs["user-data"])
+    text_2 = render_mod.compose_output(result_2.outputs["user-data"], cfg.outputs["user-data"])
     assert text_1 == text_2
+
+
+def test_render_target_produces_every_declared_output(
+    config_path: Path,
+    inventory_path: Path,
+    fragments_dir: Path,
+    secrets_example_path: Path,
+    stub_runner,
+) -> None:
+    """The example project's targets produce both `user-data` and `meta-data`."""
+    _, result = _render(
+        "gb10-01",
+        config_path=config_path,
+        inventory_path=inventory_path,
+        fragments_dir=fragments_dir,
+        secrets_example_path=secrets_example_path,
+        stub_runner=stub_runner,
+    )
+    assert set(result.outputs) == {"user-data", "meta-data"}
+    assert result.outputs["meta-data"].document == {
+        "instance-id": "gb10-01",
+        "local-hostname": "gb10-01",
+    }
+
+
+def test_undeclared_output_not_produced(
+    config_path: Path,
+    fragments_dir: Path,
+    secrets_example_path: Path,
+    stub_runner,
+    tmp_path: Path,
+) -> None:
+    """An output no layer contributes fragments to is simply absent from the
+    result, not present-but-empty."""
+    inventory_path = tmp_path / "targets.yaml"
+    inventory_path.write_text(
+        """
+version: 1
+targets:
+  bare:
+    outputs:
+      user-data:
+        fragments: []
+    variables: {}
+"""
+    )
+    cfg = config_mod.load_config(config_path)
+    result = render_mod.render_target(
+        "bare",
+        config=cfg,
+        inventory_path=inventory_path,
+        fragments_dir=fragments_dir,
+        secrets_path=secrets_example_path,
+        runner=stub_runner,
+    )
+    assert result.outputs == {}
+
+
+def test_unknown_output_name_in_inventory_raises_config_error(
+    fragments_dir: Path,
+    secrets_example_path: Path,
+    stub_runner,
+    tmp_path: Path,
+) -> None:
+    """A target whose inventory references an output name absent from the
+    project config's `outputs` fails with ConfigError."""
+    inventory_path = tmp_path / "targets.yaml"
+    inventory_path.write_text(
+        """
+version: 1
+targets:
+  t:
+    outputs:
+      not-declared-anywhere:
+        fragments: [autoinstall/base]
+    variables: {}
+"""
+    )
+    config_path = tmp_path / "yaml-frag.yaml"
+    config_path.write_text(
+        f"""
+version: 1
+fragments_dir: {fragments_dir}
+outputs:
+  user-data:
+    path: "{tmp_path}/rendered/{{target}}/user-data"
+"""
+    )
+    cfg = config_mod.load_config(config_path)
+    with pytest.raises(ConfigError):
+        render_mod.render_target(
+            "t",
+            config=cfg,
+            inventory_path=inventory_path,
+            fragments_dir=fragments_dir,
+            secrets_path=secrets_example_path,
+            runner=stub_runner,
+        )
 
 
 # --- Additional unit-style tests for render.py's own responsibilities -------
@@ -384,9 +485,9 @@ def test_redact_variables_secret_source_shown_regardless_of_name() -> None:
 
 
 def test_compose_output_ends_with_single_trailing_newline() -> None:
-    from yaml_frag.models import RenderResult
+    from yaml_frag.models import RenderedOutput
 
-    result = RenderResult(target="t", document={"a": 1}, provenance={}, overrides=())
+    result = RenderedOutput(name="main", document={"a": 1}, provenance={}, overrides=())
     output = OutputSpec(path="rendered/{target}", template=None)
     text = render_mod.compose_output(result, output)
     assert text.endswith("\n")

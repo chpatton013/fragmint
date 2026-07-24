@@ -3,23 +3,33 @@
 #
 # Everything domain-specific lives here (and in fragments), never in the
 # renderer: the #cloud-config header comes from the output template, and the
-# optional Subiquity check is a named validator.
+# optional Subiquity check is a named validator. This project renders two
+# named outputs per target — `user-data` and `meta-data` — which fragments
+# feed which output is declared per-output in the inventory (README.md
+# "Fragment order").
 version: 1
 
 inventory: inventory/targets.yaml
 fragments_dir: fragments
 
-output:
-  # {target} is substituted with the target name.
-  path: "rendered/{target}/user-data"
-  # The serialized YAML replaces the literal token "{{ document }}" in this
-  # file. This is what prepends "#cloud-config".
-  template: templates/user-data.tmpl
-  # Optional JSON schema for the rendered document (unused by this project;
-  # structural checks are done via the autoinstall/checks fragment instead).
-  schema: null
-  # Named validators to run by default for this output (none by default).
-  validators: []
+outputs:
+  user-data:
+    # {target} is substituted with the target name.
+    path: "rendered/{target}/user-data"
+    # The serialized YAML replaces the literal token "{{ document }}" in this
+    # file. This is what prepends "#cloud-config".
+    template: templates/user-data.tmpl
+    # Optional JSON schema for the rendered document (unused by this project;
+    # structural checks are done via the autoinstall/checks fragment instead).
+    schema: null
+    # Named validators to run by default for this output (none by default).
+    validators: []
+    # The output implied by e.g. `--stdout` when a target produces more than
+    # one output and no `--only` is given.
+    default: true
+
+  meta-data:
+    path: "rendered/{target}/meta-data"
 
 # Named external validators, selected with --validator NAME.
 validators:

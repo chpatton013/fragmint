@@ -83,17 +83,25 @@ class SecretStore:
     secrets: dict[str, YamlValue] = field(default_factory=dict)
 
 
+#: Per-output fragment lists, keyed by output name (see README.md "Project
+#: configuration" and "Fragment order"). Each layer (defaults/group/target)
+#: declares only the fragments *it* contributes to a given output; the final
+#: list for an output is the positional concatenation across layers.
+OutputFragments = dict[str, tuple[str, ...]]
+
+
 @dataclass(frozen=True)
 class GroupDefinition:
-    """A reusable set of variables and fragments referenced by targets.
+    """A reusable set of variables and per-output fragments referenced by targets.
 
     See README.md "Authoring inventory". Group order is significant and must
-    never be reordered.
+    never be reordered. ``output_fragments`` maps output name -> this group's
+    ordered fragment contribution to that output.
     """
 
     name: str
     variables: Variables = field(default_factory=dict)
-    fragments: tuple[str, ...] = ()
+    output_fragments: OutputFragments = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -101,14 +109,16 @@ class TargetDefinition:
     """A single target as declared in the inventory.
 
     A target is any named thing you render a document for (a machine, an
-    environment, a service). ``groups`` and ``fragments`` preserve declaration
-    order. ``variables`` are the target-level variables only (defaults/group/
-    secret/CLI layering is resolved later in :mod:`inventory` / :mod:`render`).
+    environment, a service). ``groups`` and each output's fragment list
+    preserve declaration order. ``variables`` are the target-level variables
+    only (defaults/group/secret/CLI layering is resolved later in
+    :mod:`inventory` / :mod:`render`). ``output_fragments`` maps output name ->
+    this target's ordered fragment contribution to that output.
     """
 
     name: str
     groups: tuple[str, ...] = ()
-    fragments: tuple[str, ...] = ()
+    output_fragments: OutputFragments = field(default_factory=dict)
     variables: Variables = field(default_factory=dict)
 
 
@@ -117,12 +127,12 @@ class Inventory:
     """The fully parsed inventory document.
 
     See README.md "Authoring inventory". ``default_variables`` and
-    ``default_fragments`` come from the top-level ``defaults`` block.
+    ``default_output_fragments`` come from the top-level ``defaults`` block.
     """
 
     version: int
     default_variables: Variables = field(default_factory=dict)
-    default_fragments: tuple[str, ...] = ()
+    default_output_fragments: OutputFragments = field(default_factory=dict)
     groups: dict[str, GroupDefinition] = field(default_factory=dict)
     targets: dict[str, TargetDefinition] = field(default_factory=dict)
 
@@ -189,36 +199,44 @@ class ProvenanceEntry:
 class ResolvedTarget:
     """The fully resolved inputs for one target, prior to rendering.
 
-    Produced by :mod:`inventory`. ``fragments`` is the final ordered fragment
-    reference list (defaults -> groups -> target, per README.md "Fragment
-    order"); precedence is purely positional. ``variables`` is the fully
-    layered variable map (defaults -> groups -> target -> secrets -> CLI, per
-    README.md "Variable precedence").
+    Produced by :mod:`inventory`. ``output_fragments`` maps output name -> its
+    final ordered fragment reference list (defaults -> groups -> target, per
+    README.md "Fragment order"); precedence is purely positional. Only outputs
+    with at least one fragment appear here — an output no layer contributed to
+    is not produced for this target. ``variables`` is the fully layered
+    variable map (defaults -> groups -> target -> secrets -> CLI, per
+    README.md "Variable precedence"), shared across all of the target's outputs.
     """
 
     name: str
     groups: tuple[str, ...]
-    fragments: tuple[str, ...]
+    output_fragments: OutputFragments
     variables: Variables
 
 
 @dataclass(frozen=True)
 class OutputSpec:
-    """How a target's rendered document is written. See README.md
-    "Project configuration".
+    """How one named output file is written. See README.md "Project
+    configuration".
 
-    ``path`` is a destination pattern containing ``{target}``. ``template`` is
-    an optional text-template file into which the serialized YAML is injected
-    (replacing the literal token ``{{ document }}``); when ``None`` the
-    serialized YAML is written verbatim. ``schema`` is an optional JSON schema
-    the rendered document is validated against. ``validators`` names the
-    validators run by default for this output.
+    A project declares one or more named outputs (e.g. ``user-data``,
+    ``meta-data``); each is entirely independent — its own path, template,
+    schema, and validators. ``path`` is a destination pattern containing
+    ``{target}``. ``template`` is an optional text-template file into which the
+    serialized YAML is injected (replacing the literal token ``{{ document
+    }}``); when ``None`` the serialized YAML is written verbatim. ``schema`` is
+    an optional JSON schema the rendered document is validated against.
+    ``validators`` names the validators run by default for this output.
+    ``default`` marks the output implied by commands like ``--stdout`` when a
+    target produces more than one output and no ``--only`` is given (see
+    README.md "CLI usage").
     """
 
     path: str = "rendered/{target}"
     template: str | None = None
     schema: str | None = None
     validators: tuple[str, ...] = ()
+    default: bool = False
 
 
 @dataclass(frozen=True)
@@ -240,28 +258,49 @@ class ProjectConfig:
 
     See README.md "Project configuration". This is where domain-specific behavior
     (output template/header, path layout, validators, document schema) lives —
-    never in the renderer code.
+    never in the renderer code. ``outputs`` is a non-empty map of output name ->
+    :class:`OutputSpec`. ``default_output`` is the name of the output implied
+    when a target produces several and no ``--only``/explicit selection is
+    given: the sole entry when ``outputs`` has exactly one, the one marked
+    ``default: true`` when exactly one is so marked, or ``None`` otherwise (see
+    README.md "CLI usage").
     """
 
     version: int
     inventory: str
     fragments_dir: str
-    output: OutputSpec
+    outputs: dict[str, OutputSpec]
+    default_output: str | None
     validators: dict[str, ValidatorSpec] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
-class RenderResult:
-    """The output of rendering a single target (in memory).
+class RenderedOutput:
+    """The rendered result for a single named output of a target (in memory).
 
-    ``document`` is the final merged data (the root mapping). ``provenance``
-    maps a document path string (e.g. ``/autoinstall/kernel/package``) to the
-    list of contributing entries, most recent last. ``overrides`` holds any
-    override warnings collected during merge (see README.md "Conflict reporting").
-    Serialization and output templating happen in :mod:`render`.
+    ``document`` is the final merged data (the root mapping) for this output
+    alone. ``provenance`` maps a document path string (e.g.
+    ``/autoinstall/kernel/package``) to the list of contributing entries, most
+    recent last. ``overrides`` holds any override warnings collected during
+    this output's merge (see README.md "Conflict reporting"). Serialization
+    and output templating happen in :mod:`render`.
     """
 
-    target: str
+    name: str
     document: dict[str, YamlValue]
     provenance: dict[str, list[ProvenanceEntry]] = field(default_factory=dict)
     overrides: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RenderResult:
+    """The output of rendering every produced output of a single target.
+
+    ``outputs`` maps output name -> :class:`RenderedOutput`, containing only
+    the outputs this target actually produced (README.md "Fragment order":
+    an output with no contributing fragments for this target is absent, not
+    empty).
+    """
+
+    target: str
+    outputs: dict[str, RenderedOutput] = field(default_factory=dict)

@@ -1,0 +1,15 @@
+fragment:
+  version: 1
+  description: cloud-init instance metadata (instance-id, local-hostname).
+
+requires:
+  variables:
+    - identity_hostname
+
+operations:
+  - op: set
+    path: /instance-id
+    value: "{{ identity_hostname }}"
+  - op: set
+    path: /local-hostname
+    value: "{{ identity_hostname }}"

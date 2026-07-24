@@ -48,6 +48,8 @@ def test_render_writes_configured_output_path(
             str(repo_root / "example" / "yaml-frag.yaml"),
             "--secrets",
             str(repo_root / "example" / "inventory" / "secrets.example.yaml"),
+            "--only",
+            "user-data",
             "--output",
             str(out_dir / "user-data"),
         ]
@@ -84,6 +86,77 @@ def test_render_stdout_only_output_to_stdout(
     assert "autoinstall:" in captured.out
 
 
+def test_render_writes_every_produced_output(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    """`render <target>` (no --only) writes every output the target produces."""
+    exit_code = main(
+        [
+            "render",
+            "gb10-01",
+            "--config",
+            str(repo_root / "example" / "yaml-frag.yaml"),
+            "--secrets",
+            str(repo_root / "example" / "inventory" / "secrets.example.yaml"),
+        ]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    rendered_dir = repo_root / "example" / "rendered" / "gb10-01"
+    try:
+        assert (rendered_dir / "user-data").is_file()
+        assert (rendered_dir / "meta-data").is_file()
+        meta = (rendered_dir / "meta-data").read_text()
+        assert "instance-id: gb10-01" in meta
+    finally:
+        import shutil
+
+        shutil.rmtree(rendered_dir, ignore_errors=True)
+
+
+def test_render_only_scopes_to_single_output(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    """`render --only NAME` writes/prints only the named output."""
+    out_path = tmp_path / "meta-data"
+    exit_code = main(
+        [
+            "render",
+            "gb10-01",
+            "--config",
+            str(repo_root / "example" / "yaml-frag.yaml"),
+            "--secrets",
+            str(repo_root / "example" / "inventory" / "secrets.example.yaml"),
+            "--only",
+            "meta-data",
+            "--output",
+            str(out_path),
+        ]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    assert out_path.is_file()
+    assert "instance-id: gb10-01" in out_path.read_text()
+
+
+def test_render_only_unknown_output_is_config_error(repo_root: Path) -> None:
+    """`--only` naming an output the project config doesn't declare fails."""
+    exit_code = main(
+        [
+            "render",
+            "gb10-01",
+            "--config",
+            str(repo_root / "example" / "yaml-frag.yaml"),
+            "--secrets",
+            str(repo_root / "example" / "inventory" / "secrets.example.yaml"),
+            "--only",
+            "no-such-output",
+            "--stdout",
+        ]
+    )
+    assert exit_code == ExitCode.CONFIG_ERROR
+
+
 def test_render_all_returns_nonzero_if_any_fails(
     tmp_path: Path,
     repo_root: Path,
@@ -107,15 +180,16 @@ operations:
     inventory_path.write_text(
         """
 version: 1
-defaults:
-  variables: {}
-  fragments: []
 targets:
   good:
-    fragments: [ok]
+    outputs:
+      main:
+        fragments: [ok]
     variables: {}
   bad:
-    fragments: [does-not-exist]
+    outputs:
+      main:
+        fragments: [does-not-exist]
     variables: {}
 """
     )
@@ -126,8 +200,9 @@ targets:
 version: 1
 inventory: {inventory_path}
 fragments_dir: {fragments_dir}
-output:
-  path: "{tmp_path}/rendered/{{target}}/output"
+outputs:
+  main:
+    path: "{tmp_path}/rendered/{{target}}/output"
 """
     )
 
@@ -160,12 +235,11 @@ operations:
     inventory_path.write_text(
         """
 version: 1
-defaults:
-  variables: {}
-  fragments: []
 targets:
   broken-target:
-    fragments: [broken]
+    outputs:
+      main:
+        fragments: [broken]
     variables: {}
 """
     )
@@ -175,8 +249,9 @@ targets:
 version: 1
 inventory: {inventory_path}
 fragments_dir: {fragments_dir}
-output:
-  path: "{tmp_path}/rendered/{{target}}/output"
+outputs:
+  main:
+    path: "{tmp_path}/rendered/{{target}}/output"
 """
     )
     exit_code = main(["render", "broken-target", "--config", str(config_path), "--stdout"])
@@ -218,12 +293,11 @@ operations:
     inventory_path.write_text(
         """
 version: 1
-defaults:
-  variables: {}
-  fragments: []
 targets:
   t:
-    fragments: [ok]
+    outputs:
+      main:
+        fragments: [ok]
     variables: {}
 """
     )
@@ -234,8 +308,9 @@ targets:
 version: 1
 inventory: {inventory_path}
 fragments_dir: {fragments_dir}
-output:
-  path: "{tmp_path}/rendered/{{target}}/output"
+outputs:
+  main:
+    path: "{tmp_path}/rendered/{{target}}/output"
 validators:
   ok-validator:
     command: ["true"]
@@ -299,6 +374,49 @@ def test_explain_shows_contributors_for_lists(
     assert "contributors:" in out
 
 
+def test_explain_shows_every_produced_output_by_default(
+    repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`explain` with no --only shows a section per output the target produces."""
+    exit_code = main(
+        [
+            "explain",
+            "gb10-01",
+            "--config",
+            str(repo_root / "example" / "yaml-frag.yaml"),
+            "--secrets",
+            str(repo_root / "example" / "inventory" / "secrets.example.yaml"),
+        ]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    out = capsys.readouterr().out
+    assert "== user-data ==" in out
+    assert "== meta-data ==" in out
+    assert "/instance-id" in out
+
+
+def test_explain_only_scopes_to_single_output(
+    repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`explain --only NAME` shows just the named output's section."""
+    exit_code = main(
+        [
+            "explain",
+            "gb10-01",
+            "--config",
+            str(repo_root / "example" / "yaml-frag.yaml"),
+            "--secrets",
+            str(repo_root / "example" / "inventory" / "secrets.example.yaml"),
+            "--only",
+            "meta-data",
+        ]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    out = capsys.readouterr().out
+    assert "== meta-data ==" in out
+    assert "== user-data ==" not in out
+
+
 def test_explain_does_not_execute_captures_or_reveal_secrets(
     repo_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -352,10 +470,8 @@ version: 1
 defaults:
   variables:
     identity_password_hint: "not-a-real-secret-value"
-  fragments: []
 targets:
   t:
-    fragments: []
     variables: {}
 """
     )
@@ -365,8 +481,9 @@ targets:
 version: 1
 inventory: {inventory_path}
 fragments_dir: {tmp_path}
-output:
-  path: "{tmp_path}/rendered/{{target}}/output"
+outputs:
+  main:
+    path: "{tmp_path}/rendered/{{target}}/output"
 """
     )
     exit_code = main(["inspect", "t", "--config", str(config_path)])
@@ -405,12 +522,11 @@ operations:
     inventory_path.write_text(
         """
 version: 1
-defaults:
-  variables: {}
-  fragments: []
 targets:
   broken-target:
-    fragments: [broken]
+    outputs:
+      main:
+        fragments: [broken]
     variables: {}
 """
     )
@@ -421,8 +537,9 @@ targets:
 version: 1
 inventory: {inventory_path}
 fragments_dir: {fragments_dir}
-output:
-  path: "{output_path}"
+outputs:
+  main:
+    path: "{output_path}"
 """
     )
     exit_code = main(["render", "broken-target", "--config", str(config_path)])

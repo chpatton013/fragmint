@@ -22,16 +22,16 @@ def test_load_defaults(tmp_path: Path) -> None:
     configuration")."""
     config_path = _write(
         tmp_path / "yaml-frag.yaml",
-        "version: 1\noutput:\n  path: rendered/{target}\n",
+        "version: 1\noutputs:\n  main:\n    path: rendered/{target}\n",
     )
     config = load_config(config_path)
     assert config.version == 1
     assert config.inventory == str(tmp_path / "inventory/targets.yaml")
     assert config.fragments_dir == str(tmp_path / "fragments")
-    assert config.output.path == str(tmp_path / "rendered/{target}")
-    assert config.output.template is None
-    assert config.output.schema is None
-    assert config.output.validators == ()
+    assert config.outputs["main"].path == str(tmp_path / "rendered/{target}")
+    assert config.outputs["main"].template is None
+    assert config.outputs["main"].schema is None
+    assert config.outputs["main"].validators == ()
     assert config.validators == {}
 
 
@@ -46,15 +46,16 @@ def test_paths_resolve_relative_to_config_directory(tmp_path: Path) -> None:
         "version: 1\n"
         "inventory: inventory/targets.yaml\n"
         "fragments_dir: fragments\n"
-        "output:\n"
-        "  path: rendered/{target}/user-data\n"
-        "  template: templates/user-data.tmpl\n",
+        "outputs:\n"
+        "  user-data:\n"
+        "    path: rendered/{target}/user-data\n"
+        "    template: templates/user-data.tmpl\n",
     )
     config = load_config(config_path)
     assert config.inventory == str(project_dir / "inventory/targets.yaml")
     assert config.fragments_dir == str(project_dir / "fragments")
-    assert config.output.path == str(project_dir / "rendered/{target}/user-data")
-    assert config.output.template == str(project_dir / "templates/user-data.tmpl")
+    assert config.outputs["user-data"].path == str(project_dir / "rendered/{target}/user-data")
+    assert config.outputs["user-data"].template == str(project_dir / "templates/user-data.tmpl")
 
 
 def test_absolute_paths_pass_through_unchanged(tmp_path: Path) -> None:
@@ -62,33 +63,23 @@ def test_absolute_paths_pass_through_unchanged(tmp_path: Path) -> None:
     abs_inventory = tmp_path / "elsewhere" / "targets.yaml"
     config_path = _write(
         tmp_path / "yaml-frag.yaml",
-        f"version: 1\ninventory: {abs_inventory}\noutput:\n  path: rendered/{{target}}\n",
+        f"version: 1\ninventory: {abs_inventory}\noutputs:\n  main:\n    path: rendered/{{target}}\n",
     )
     config = load_config(config_path)
     assert config.inventory == str(abs_inventory)
 
 
 def test_output_path_substitution() -> None:
-    """`{target}` in output.path is substituted with the target name."""
-    config = ProjectConfig(
-        version=1,
-        inventory="inventory/targets.yaml",
-        fragments_dir="fragments",
-        output=OutputSpec(path="rendered/{target}/user-data"),
-    )
-    path = resolve_output_path(config, "gb10-01")
+    """`{target}` in an output's path is substituted with the target name."""
+    output = OutputSpec(path="rendered/{target}/user-data")
+    path = resolve_output_path(output, "gb10-01")
     assert path == Path("rendered/gb10-01/user-data")
 
 
 def test_output_path_override() -> None:
     """An explicit override path is used verbatim, ignoring the pattern."""
-    config = ProjectConfig(
-        version=1,
-        inventory="inventory/targets.yaml",
-        fragments_dir="fragments",
-        output=OutputSpec(path="rendered/{target}/user-data"),
-    )
-    path = resolve_output_path(config, "gb10-01", override=Path("/tmp/out"))
+    output = OutputSpec(path="rendered/{target}/user-data")
+    path = resolve_output_path(output, "gb10-01", override=Path("/tmp/out"))
     assert path == Path("/tmp/out")
 
 
@@ -97,42 +88,120 @@ def test_output_template_injects_document_token(tmp_path: Path) -> None:
     template_path = _write(tmp_path / "tmpl.txt", "#cloud-config\n{{ document }}")
     config_path = _write(
         tmp_path / "yaml-frag.yaml",
-        f"version: 1\noutput:\n  path: rendered/{{target}}\n  template: {template_path}\n",
+        f"version: 1\noutputs:\n  main:\n    path: rendered/{{target}}\n    template: {template_path}\n",
     )
     config = load_config(config_path)
-    assert config.output.template == str(template_path)
+    assert config.outputs["main"].template == str(template_path)
 
-    template_text = Path(config.output.template).read_text()
+    template_text = Path(config.outputs["main"].template).read_text()
     rendered = template_text.replace("{{ document }}", "autoinstall:\n  version: 1\n")
     assert rendered == "#cloud-config\nautoinstall:\n  version: 1\n"
 
 
 def test_no_template_writes_yaml_verbatim(tmp_path: Path) -> None:
-    """With no output.template, the serialized YAML is written unchanged."""
+    """With no output template, the serialized YAML is written unchanged."""
     config_path = _write(
         tmp_path / "yaml-frag.yaml",
-        "version: 1\noutput:\n  path: rendered/{target}\n",
+        "version: 1\noutputs:\n  main:\n    path: rendered/{target}\n",
     )
     config = load_config(config_path)
-    assert config.output.template is None
+    assert config.outputs["main"].template is None
+
+
+def test_single_output_is_implicit_default(tmp_path: Path) -> None:
+    """A project with exactly one output treats it as the default, even
+    without `default: true` (README.md "CLI usage")."""
+    config_path = _write(
+        tmp_path / "yaml-frag.yaml",
+        "version: 1\noutputs:\n  main:\n    path: rendered/{target}\n",
+    )
+    config = load_config(config_path)
+    assert config.default_output == "main"
+
+
+def test_marked_default_output_among_several(tmp_path: Path) -> None:
+    """With multiple outputs, the one marked `default: true` wins."""
+    config_path = _write(
+        tmp_path / "yaml-frag.yaml",
+        "version: 1\n"
+        "outputs:\n"
+        "  user-data:\n"
+        "    path: rendered/{target}/user-data\n"
+        "    default: true\n"
+        "  meta-data:\n"
+        "    path: rendered/{target}/meta-data\n",
+    )
+    config = load_config(config_path)
+    assert config.default_output == "user-data"
+
+
+def test_no_default_among_several_unmarked_outputs(tmp_path: Path) -> None:
+    """With multiple outputs and none marked default, there's no implicit
+    default output."""
+    config_path = _write(
+        tmp_path / "yaml-frag.yaml",
+        "version: 1\n"
+        "outputs:\n"
+        "  user-data:\n"
+        "    path: rendered/{target}/user-data\n"
+        "  meta-data:\n"
+        "    path: rendered/{target}/meta-data\n",
+    )
+    config = load_config(config_path)
+    assert config.default_output is None
+
+
+def test_multiple_default_outputs_rejected(tmp_path: Path) -> None:
+    """At most one output may be marked `default: true`."""
+    config_path = _write(
+        tmp_path / "yaml-frag.yaml",
+        "version: 1\n"
+        "outputs:\n"
+        "  user-data:\n"
+        "    path: rendered/{target}/user-data\n"
+        "    default: true\n"
+        "  meta-data:\n"
+        "    path: rendered/{target}/meta-data\n"
+        "    default: true\n",
+    )
+    with pytest.raises(ConfigError):
+        load_config(config_path)
 
 
 def test_validator_selection_resolution() -> None:
-    """--validator names override output defaults; unknown names raise ConfigError."""
+    """--validator names override an output's defaults; unknown names raise
+    ConfigError."""
+    output = OutputSpec(path="rendered/{target}", validators=("subiquity",))
     config = ProjectConfig(
         version=1,
         inventory="inventory/targets.yaml",
         fragments_dir="fragments",
-        output=OutputSpec(path="rendered/{target}", validators=("subiquity",)),
+        outputs={"main": output},
+        default_output="main",
         validators={
             "subiquity": ValidatorSpec(name="subiquity", command=("true",)),
             "other": ValidatorSpec(name="other", command=("true",)),
         },
     )
-    assert select_validators(config, ()) == ("subiquity",)
-    assert select_validators(config, ("other",)) == ("other",)
+    assert select_validators(config, output, ()) == ("subiquity",)
+    assert select_validators(config, output, ("other",)) == ("other",)
     with pytest.raises(ConfigError):
-        select_validators(config, ("nope",))
+        select_validators(config, output, ("nope",))
+
+
+def test_output_validator_not_declared_raises(tmp_path: Path) -> None:
+    """An output's default validator must be declared in the top-level
+    `validators` map."""
+    config_path = _write(
+        tmp_path / "yaml-frag.yaml",
+        "version: 1\n"
+        "outputs:\n"
+        "  main:\n"
+        "    path: rendered/{target}\n"
+        "    validators: [nope]\n",
+    )
+    with pytest.raises(ConfigError):
+        load_config(config_path)
 
 
 def test_invalid_config_raises_config_error(tmp_path: Path) -> None:
@@ -143,7 +212,7 @@ def test_invalid_config_raises_config_error(tmp_path: Path) -> None:
 
     wrong_version = _write(
         tmp_path / "yaml-frag.yaml",
-        "version: 2\noutput:\n  path: rendered/{target}\n",
+        "version: 2\noutputs:\n  main:\n    path: rendered/{target}\n",
     )
     with pytest.raises(ConfigError):
         load_config(wrong_version)
@@ -152,10 +221,16 @@ def test_invalid_config_raises_config_error(tmp_path: Path) -> None:
     with pytest.raises(ConfigError):
         load_config(malformed)
 
+    no_outputs = _write(tmp_path / "empty-outputs.yaml", "version: 1\noutputs: {}\n")
+    with pytest.raises(ConfigError):
+        load_config(no_outputs)
+
 
 def test_real_project_config_loads(config_path: Path, example_root: Path) -> None:
-    """The repo's example project config loads and exposes the subiquity
-    validator, with its paths anchored under example/ regardless of CWD."""
+    """The repo's example project config loads and exposes both outputs, with
+    their paths anchored under example/ regardless of CWD."""
     config = load_config(config_path)
-    assert config.output.path == str(example_root / "rendered/{target}/user-data")
+    assert config.outputs["user-data"].path == str(example_root / "rendered/{target}/user-data")
+    assert config.outputs["meta-data"].path == str(example_root / "rendered/{target}/meta-data")
+    assert config.default_output == "user-data"
     assert "subiquity" in config.validators

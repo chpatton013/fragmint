@@ -16,20 +16,20 @@ def _sample_inventory() -> Inventory:
     return Inventory(
         version=1,
         default_variables={"a": "default-a", "b": "default-b"},
-        default_fragments=("frag/default",),
+        default_output_fragments={"out": ("frag/default",)},
         groups={
             "g1": GroupDefinition(
-                name="g1", variables={"a": "g1-a"}, fragments=("frag/g1",)
+                name="g1", variables={"a": "g1-a"}, output_fragments={"out": ("frag/g1",)}
             ),
             "g2": GroupDefinition(
-                name="g2", variables={"b": "g2-b"}, fragments=("frag/g2",)
+                name="g2", variables={"b": "g2-b"}, output_fragments={"out": ("frag/g2",)}
             ),
         },
         targets={
             "t1": TargetDefinition(
                 name="t1",
                 groups=("g1", "g2"),
-                fragments=("frag/t1",),
+                output_fragments={"out": ("frag/t1",)},
                 variables={"a": "t1-a"},
             ),
             "t2": TargetDefinition(name="t2"),
@@ -76,10 +76,23 @@ def test_group_order_preserved() -> None:
 
 
 def test_fragment_order() -> None:
-    """Final fragment order is defaults -> groups (in order) -> target."""
+    """Final fragment order, per output, is defaults -> groups (in order) -> target."""
     inventory = _sample_inventory()
     resolved = resolve_target(inventory, "t1")
-    assert resolved.fragments == ("frag/default", "frag/g1", "frag/g2", "frag/t1")
+    assert resolved.output_fragments["out"] == (
+        "frag/default",
+        "frag/g1",
+        "frag/g2",
+        "frag/t1",
+    )
+
+
+def test_output_with_no_contributing_fragments_is_absent() -> None:
+    """An output name no layer contributes fragments to is not produced."""
+    inventory = _sample_inventory()
+    resolved = resolve_target(inventory, "t2")
+    assert resolved.output_fragments == {"out": ("frag/default",)}
+    assert "other-output" not in resolved.output_fragments
 
 
 def test_missing_group_reference_fails() -> None:
@@ -146,7 +159,8 @@ def test_real_inventory_loads(inventory_path: Path) -> None:
     """The repo's example inventory loads and resolves without error."""
     inventory = load_inventory(inventory_path)
     resolved = resolve_target(inventory, "gb10-01")
-    assert "hosts/gb10-01" in resolved.fragments
+    assert "hosts/gb10-01" in resolved.output_fragments["user-data"]
+    assert "meta/instance-id" in resolved.output_fragments["meta-data"]
     assert resolved.variables["identity_hostname"] == "gb10-01"
 
 
