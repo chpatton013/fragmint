@@ -43,7 +43,7 @@ This README is the authoritative reference for the tool's design and usage.
   contains unresolved template expressions, or a configured validator reports
   failure. Assertions such as "the document must contain
   `autoinstall.version: 1`" are **not** built in — they're declared by the
-  project's fragments (see `fragments/autoinstall/checks.yaml`).
+  project's fragments (see `example/fragments/autoinstall/checks.yaml`).
 - **Human-readable source files.** Inventory, fragment, and project-config
   files are meant to be easy to review in Git. Avoid embedding large amounts
   of Python or arbitrary executable logic in YAML; use Jinja-style variable
@@ -68,18 +68,33 @@ This installs the `yaml-frag` command.
 
 ## Repository structure
 
-The tool imposes no fragment directory structure — the layout below is what
-this repository's example project uses. `fragments/` in particular is
-entirely up to the project: fragments may live under any nested path and are
-referenced by their path relative to the fragments directory.
+`yaml-frag` the tool (`src/yaml_frag/`, `schemas/`) is separate from any
+particular project that uses it. A **project** is just a directory containing
+a `yaml-frag.yaml` plus whatever inventory, fragments, and templates it needs —
+nothing about its internal layout is baked into the tool, and it can be
+invoked from anywhere via `--config path/to/that/yaml-frag.yaml`. Every path a
+project declares in its config is resolved relative to *that config file's own
+directory*, not the caller's working directory (see "Project configuration"
+below) — that's what makes the project directory portable and relocatable.
+
+This repository ships one such project, the Ubuntu autoinstall example, under
+`example/`:
 
 ```
-yaml-frag.yaml   Project configuration (input locations, output, validators).
-inventory/       Target/group/default definitions (targets.yaml) + secrets.example.yaml.
-fragments/       Reusable, composable fragments under any nested layout.
+example/
+├── yaml-frag.yaml   Project configuration (input locations, output, validators).
+├── inventory/       Target/group/default definitions (targets.yaml) + secrets.example.yaml.
+├── fragments/       Reusable, composable fragments under any nested layout.
+├── templates/       Output templates (e.g. the #cloud-config wrapper).
+└── rendered/        Output, per the configured path pattern (git-ignored).
+```
+
+`fragments/` in particular is entirely up to the project: fragments may live
+under any nested path and are referenced by their path relative to the
+fragments directory. The tool itself lives alongside it:
+
+```
 schemas/         JSON schemas for inventory, fragment, project, and secrets files.
-templates/       Output templates (e.g. the #cloud-config wrapper).
-rendered/        Output, per the configured path pattern (git-ignored).
 src/yaml_frag/   The package (see "Modules" below).
 tests/           Unit, inventory, config, snapshot, and CLI tests + fixtures.
 ```
@@ -162,9 +177,23 @@ Everything domain-specific (the `#cloud-config` header, the Subiquity
 validator, any document schema) lives here or in fragments — never in the
 renderer.
 
+**Portability.** Every path above (`inventory`, `fragments_dir`,
+`output.path`, `output.template`, `output.schema`) is resolved **relative to
+the directory containing this config file**, never the caller's current
+working directory. An already-absolute path is left unchanged. This is what
+lets a project directory — like `example/` in this repository — be self-
+contained and relocatable: it works identically whether you run
+`yaml-frag render gb10-01 --config example/yaml-frag.yaml` from the repo root,
+`yaml-frag render gb10-01 --config yaml-frag.yaml` from inside `example/`, or
+copy `example/` somewhere else entirely and invoke it from there. `--inventory`
+and `--fragments-dir` CLI overrides are the exception: given directly on the
+command line, they resolve relative to the CWD like any ordinary CLI argument.
+
 ## Authoring inventory
 
-`inventory/targets.yaml` declares `defaults`, `groups`, and `targets`:
+`inventory/targets.yaml` (paths below are relative to the project directory,
+e.g. `example/inventory/targets.yaml`) declares `defaults`, `groups`, and
+`targets`:
 
 ```yaml
 version: 1
@@ -324,7 +353,7 @@ flat named store referenced by `from: secret` sources — not a precedence
 layer.
 
 ```bash
-yaml-frag render gb10-01 --secrets inventory/secrets.yaml
+yaml-frag render gb10-01 --config example/yaml-frag.yaml --secrets example/inventory/secrets.yaml
 ```
 
 ```yaml
@@ -332,10 +361,11 @@ secrets:
   gb10-01_password: "correct horse battery staple"
 ```
 
-A tracked `inventory/secrets.example.yaml` documents the shape;
-`inventory/secrets.yaml` is git-ignored. The renderer never logs secret
-values or writes them to diagnostics; they appear only where a fragment
-places a resolved value into the output document.
+`--secrets`, like other CLI-supplied paths, resolves relative to the CWD (not
+the project directory). A tracked `example/inventory/secrets.example.yaml`
+documents the shape; `example/inventory/secrets.yaml` is git-ignored. The
+renderer never logs secret values or writes them to diagnostics; they appear
+only where a fragment places a resolved value into the output document.
 
 ## Authoring fragments
 
@@ -657,7 +687,9 @@ yaml-frag inspect gb10-01                # resolved groups/fragments/vars (redac
 yaml-frag list targets|fragments|groups
 ```
 
-Every command accepts `--config PATH` (default `yaml-frag.yaml`). Common
+All of the above assume `--config example/yaml-frag.yaml` (or that you've `cd`'d
+into `example/` and use the default). Every command accepts `--config PATH`
+(default `yaml-frag.yaml`). Common
 options: `--inventory`, `--fragments-dir`, `--output` (render only),
 `--secrets`, `--var KEY=VALUE`, `--validator NAME`, `--dry-run`,
 `--quiet-overrides`, `--no-validate`. Rendered output goes to stdout only
@@ -685,16 +717,17 @@ openssl passwd -6 -stdin>`). Pass `--show-secrets` to reveal literal values
 The repository ships a complete example that renders Ubuntu 24.04 autoinstall
 `user-data`, demonstrating that all autoinstall specifics live in data:
 
-- `yaml-frag.yaml` sets `output.template: templates/user-data.tmpl` (which
-  adds the `#cloud-config` header) and `output.path:
-  rendered/{target}/user-data`, and declares the optional `subiquity`
-  validator.
-- `fragments/autoinstall/base.yaml`, `default-user.yaml`, and `checks.yaml`,
-  `fragments/ubuntu-24.04.yaml`, `fragments/hardware/*`, `fragments/roles/*`,
-  and `fragments/hosts/*` build and assert the document.
+- `example/yaml-frag.yaml` sets `output.template:
+  templates/user-data.tmpl` (which adds the `#cloud-config` header) and
+  `output.path: rendered/{target}/user-data`, and declares the optional
+  `subiquity` validator.
+- `example/fragments/autoinstall/base.yaml`, `default-user.yaml`, and
+  `checks.yaml`, `example/fragments/ubuntu-24.04.yaml`,
+  `example/fragments/hardware/*`, `example/fragments/roles/*`, and
+  `example/fragments/hosts/*` build and assert the document.
 - Each target's `identity_password_hash` is a `capture` source that runs
   `openssl passwd -6` over the plaintext password held in the secret store
-  (`inventory/secrets.example.yaml` shows the shape).
+  (`example/inventory/secrets.example.yaml` shows the shape).
 - No autoinstall knowledge exists in `src/yaml_frag/`.
 
 Expected render for target `gb10-01` (the password hash varies run to run —

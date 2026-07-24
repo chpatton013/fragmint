@@ -45,9 +45,9 @@ def test_render_writes_configured_output_path(
             "render",
             "gb10-01",
             "--config",
-            str(repo_root / "yaml-frag.yaml"),
+            str(repo_root / "example" / "yaml-frag.yaml"),
             "--secrets",
-            str(repo_root / "inventory" / "secrets.example.yaml"),
+            str(repo_root / "example" / "inventory" / "secrets.example.yaml"),
             "--output",
             str(out_dir / "user-data"),
         ]
@@ -72,9 +72,9 @@ def test_render_stdout_only_output_to_stdout(
             "render",
             "gb10-01",
             "--config",
-            str(repo_root / "yaml-frag.yaml"),
+            str(repo_root / "example" / "yaml-frag.yaml"),
             "--secrets",
-            str(repo_root / "inventory" / "secrets.example.yaml"),
+            str(repo_root / "example" / "inventory" / "secrets.example.yaml"),
             "--stdout",
         ]
     )
@@ -192,9 +192,9 @@ def test_missing_target_exit_code(repo_root: Path) -> None:
             "render",
             "no-such-target",
             "--config",
-            str(repo_root / "yaml-frag.yaml"),
+            str(repo_root / "example" / "yaml-frag.yaml"),
             "--secrets",
-            str(repo_root / "inventory" / "secrets.example.yaml"),
+            str(repo_root / "example" / "inventory" / "secrets.example.yaml"),
             "--stdout",
         ]
     )
@@ -270,9 +270,9 @@ def test_explain_output(repo_root: Path, capsys: pytest.CaptureFixture[str]) -> 
             "gb10-01",
             "/autoinstall/kernel",
             "--config",
-            str(repo_root / "yaml-frag.yaml"),
+            str(repo_root / "example" / "yaml-frag.yaml"),
             "--secrets",
-            str(repo_root / "inventory" / "secrets.example.yaml"),
+            str(repo_root / "example" / "inventory" / "secrets.example.yaml"),
         ]
     )
     assert exit_code == ExitCode.SUCCESS
@@ -292,9 +292,9 @@ def test_explain_shows_contributors_for_lists(
             "gb10-01",
             "/autoinstall/user-data/packages",
             "--config",
-            str(repo_root / "yaml-frag.yaml"),
+            str(repo_root / "example" / "yaml-frag.yaml"),
             "--secrets",
-            str(repo_root / "inventory" / "secrets.example.yaml"),
+            str(repo_root / "example" / "inventory" / "secrets.example.yaml"),
         ]
     )
     assert exit_code == ExitCode.SUCCESS
@@ -315,7 +315,7 @@ def test_explain_does_not_execute_captures_or_reveal_secrets(
             "gb10-01",
             "/autoinstall/identity",
             "--config",
-            str(repo_root / "yaml-frag.yaml"),
+            str(repo_root / "example" / "yaml-frag.yaml"),
         ]
     )
     assert exit_code == ExitCode.SUCCESS
@@ -334,7 +334,7 @@ def test_inspect_redacts_secret_looking_variables(
             "inspect",
             "gb10-01",
             "--config",
-            str(repo_root / "yaml-frag.yaml"),
+            str(repo_root / "example" / "yaml-frag.yaml"),
         ]
     )
     assert exit_code == ExitCode.SUCCESS
@@ -445,7 +445,7 @@ def test_diagnostics_go_to_stderr(
             "render",
             "no-such-target",
             "--config",
-            str(repo_root / "yaml-frag.yaml"),
+            str(repo_root / "example" / "yaml-frag.yaml"),
             "--stdout",
         ]
     )
@@ -471,20 +471,20 @@ def test_parse_var_parses_key_value_pairs() -> None:
 
 
 def test_list_targets_groups_fragments(repo_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    exit_code = main(["list", "targets", "--config", str(repo_root / "yaml-frag.yaml")])
+    exit_code = main(["list", "targets", "--config", str(repo_root / "example" / "yaml-frag.yaml")])
     assert exit_code == ExitCode.SUCCESS
     out = capsys.readouterr().out
     assert "gb10-01" in out
     assert "gb10-02" in out
     assert "generic-vm-01" in out
 
-    exit_code = main(["list", "groups", "--config", str(repo_root / "yaml-frag.yaml")])
+    exit_code = main(["list", "groups", "--config", str(repo_root / "example" / "yaml-frag.yaml")])
     assert exit_code == ExitCode.SUCCESS
     out = capsys.readouterr().out
     assert "gb10" in out
     assert "general_servers" in out
 
-    exit_code = main(["list", "fragments", "--config", str(repo_root / "yaml-frag.yaml")])
+    exit_code = main(["list", "fragments", "--config", str(repo_root / "example" / "yaml-frag.yaml")])
     assert exit_code == ExitCode.SUCCESS
     out = capsys.readouterr().out
     assert "hardware/gb10" in out

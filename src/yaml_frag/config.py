@@ -6,6 +6,16 @@ renderer code. It declares default input locations, the output spec (path
 pattern + optional text template + optional document schema + default
 validators), and named external validators.
 
+For portability, every path a project declares (``inventory``,
+``fragments_dir``, ``output.path``, ``output.template``, ``output.schema``) is
+resolved RELATIVE TO THE CONFIG FILE'S OWN DIRECTORY, not the process's current
+working directory. This lets a project directory (e.g. ``example/``) be
+invoked from anywhere via ``--config path/to/yaml-frag.yaml`` and still find
+its own inventory, fragments, and templates. An already-absolute path in the
+config is left unchanged. CLI overrides (``--inventory``, ``--fragments-dir``,
+``--output``) are given directly on the command line and are resolved relative
+to the CWD as usual, matching ordinary CLI conventions.
+
 See README.md "Project configuration". Validate against
 ``schemas/project.schema.json`` and raise
 :class:`~yaml_frag.errors.ConfigError` (with file/field context) on any problem.
@@ -38,17 +48,31 @@ def _schema_path(name: str) -> Path:
     return Path(__file__).resolve().parents[2] / "schemas" / name
 
 
+def _resolve_relative(config_dir: Path, value: str) -> str:
+    """Anchor a project-declared path to ``config_dir``.
+
+    An already-absolute ``value`` is returned unchanged (``Path.__truediv__``
+    discards the left operand when the right one is absolute). This is what
+    makes a project directory portable: its declared paths are always relative
+    to itself, never to the caller's working directory.
+    """
+    return str(config_dir / value)
+
+
 def load_config(path: Path | None = None) -> ProjectConfig:
     """Load and validate the project configuration.
 
     When ``path`` is ``None``, use :data:`DEFAULT_CONFIG_PATH`. Apply documented
     defaults for any omitted optional fields (see :class:`~models.OutputSpec`).
+    Every path field in the returned :class:`~models.ProjectConfig` is resolved
+    relative to ``path``'s own directory (see the module docstring).
     Raise :class:`~yaml_frag.errors.ConfigError` if the file is missing,
     unparseable, the wrong version, or fails schema validation.
     """
     config_path = path if path is not None else DEFAULT_CONFIG_PATH
     if not config_path.is_file():
         raise ConfigError(f"project configuration not found: {config_path}")
+    config_dir = config_path.resolve().parent
 
     try:
         raw = load_file(config_path)
@@ -85,10 +109,12 @@ def load_config(path: Path | None = None) -> ProjectConfig:
     output_path = output_raw.get("path")
     if not isinstance(output_path, str) or not output_path:
         raise ConfigError(f"project configuration {config_path}: `output.path` is required")
+    output_template = output_raw.get("template")
+    output_schema = output_raw.get("schema")
     output = OutputSpec(
-        path=output_path,
-        template=output_raw.get("template"),
-        schema=output_raw.get("schema"),
+        path=_resolve_relative(config_dir, output_path),
+        template=_resolve_relative(config_dir, output_template) if output_template else None,
+        schema=_resolve_relative(config_dir, output_schema) if output_schema else None,
         validators=tuple(output_raw.get("validators", [])),
     )
 
@@ -109,8 +135,8 @@ def load_config(path: Path | None = None) -> ProjectConfig:
 
     return ProjectConfig(
         version=version,
-        inventory=doc.get("inventory", DEFAULT_INVENTORY),
-        fragments_dir=doc.get("fragments_dir", DEFAULT_FRAGMENTS_DIR),
+        inventory=_resolve_relative(config_dir, doc.get("inventory", DEFAULT_INVENTORY)),
+        fragments_dir=_resolve_relative(config_dir, doc.get("fragments_dir", DEFAULT_FRAGMENTS_DIR)),
         output=output,
         validators=validators,
     )

@@ -16,8 +16,8 @@ venv/
 htmlcov/
 
 # Rendered output (keep the directory, ignore its contents)
-/rendered/*
-!/rendered/.gitkeep
+/example/rendered/*
+!/example/rendered/.gitkeep
 
 # Local, untracked secrets overlay (see README.md "Secrets")
-inventory/secrets.yaml
+example/inventory/secrets.yaml

@@ -1,8 +1,9 @@
 """Shared pytest fixtures.
 
-Fixtures point at the repo's real project config, inventory, and fragments so
-tests can render the representative targets. Snapshot expectations live under
-``tests/fixtures/expected/`` (see ``tests/fixtures/README.md``).
+Fixtures point at the repo's real example project (config, inventory, and
+fragments under ``example/``) so tests can render the representative targets.
+Snapshot expectations live under ``tests/fixtures/expected/`` (see
+``tests/fixtures/README.md``).
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+EXAMPLE_ROOT = REPO_ROOT / "example"
 
 
 @pytest.fixture
@@ -20,18 +22,23 @@ def repo_root() -> Path:
 
 
 @pytest.fixture
+def example_root() -> Path:
+    return EXAMPLE_ROOT
+
+
+@pytest.fixture
 def config_path() -> Path:
-    return REPO_ROOT / "yaml-frag.yaml"
+    return EXAMPLE_ROOT / "yaml-frag.yaml"
 
 
 @pytest.fixture
 def inventory_path() -> Path:
-    return REPO_ROOT / "inventory" / "targets.yaml"
+    return EXAMPLE_ROOT / "inventory" / "targets.yaml"
 
 
 @pytest.fixture
 def fragments_dir() -> Path:
-    return REPO_ROOT / "fragments"
+    return EXAMPLE_ROOT / "fragments"
 
 
 @pytest.fixture
@@ -42,7 +49,7 @@ def fixtures_dir() -> Path:
 @pytest.fixture
 def secrets_example_path() -> Path:
     """The tracked example secret store, usable directly by tests."""
-    return REPO_ROOT / "inventory" / "secrets.example.yaml"
+    return EXAMPLE_ROOT / "inventory" / "secrets.example.yaml"
 
 
 @pytest.fixture
