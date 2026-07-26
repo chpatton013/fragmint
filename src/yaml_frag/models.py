@@ -205,7 +205,8 @@ class ResolvedTarget:
     with at least one fragment appear here — an output no layer contributed to
     is not produced for this target. ``variables`` is the fully layered
     variable map (defaults -> groups -> target -> secrets -> CLI, per
-    README.md "Variable precedence"), shared across all of the target's outputs.
+    README.md "Variable precedence"), shared across all of the target's
+    outputs, and always includes the reserved ``target`` key set to ``name``.
     """
 
     name: str

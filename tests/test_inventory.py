@@ -68,6 +68,47 @@ def test_cli_variable_precedence() -> None:
     assert resolved.variables["a"] == "cli-a"
 
 
+def test_target_variable_is_reserved_and_set() -> None:
+    """`resolved.variables["target"]` is always the target's own name, so
+    fragments can reference `{{ target }}`."""
+    inventory = _sample_inventory()
+    resolved = resolve_target(inventory, "t1")
+    assert resolved.variables["target"] == "t1"
+
+    resolved_t2 = resolve_target(inventory, "t2")
+    assert resolved_t2.variables["target"] == "t2"
+
+
+def test_defining_reserved_target_variable_raises() -> None:
+    """Declaring a `target` variable anywhere (defaults/group/target/--var) is
+    a fail-closed InventoryError, since it would otherwise be silently
+    discarded by the reserved-name injection."""
+    inventory = Inventory(
+        version=1,
+        default_variables={"target": "not-allowed"},
+        targets={"t1": TargetDefinition(name="t1")},
+    )
+    with pytest.raises(InventoryError):
+        resolve_target(inventory, "t1")
+
+    inventory_cli = Inventory(version=1, targets={"t1": TargetDefinition(name="t1")})
+    with pytest.raises(InventoryError):
+        resolve_target(inventory_cli, "t1", cli_variables={"target": "not-allowed"})
+
+
+def test_defining_reserved_output_variable_raises() -> None:
+    """`output` is reserved the same way as `target`, even though it isn't
+    actually set until render_target renders each output (see
+    inventory.RESERVED_VARIABLE_NAMES)."""
+    inventory = Inventory(
+        version=1,
+        default_variables={"output": "not-allowed"},
+        targets={"t1": TargetDefinition(name="t1")},
+    )
+    with pytest.raises(InventoryError):
+        resolve_target(inventory, "t1")
+
+
 def test_group_order_preserved() -> None:
     """Groups are applied in the target's declared order, not sorted."""
     inventory = _sample_inventory()

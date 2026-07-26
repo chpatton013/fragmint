@@ -74,11 +74,14 @@ def render_target(
        :func:`yaml_frag.sources.resolve_variables` (executing any ``capture``
        subprocesses through ``runner``, default :class:`~sources.DefaultCommandRunner`)
        — once, shared across every output;
-    4. for each produced output, independently: load + validate its referenced
-       fragments, start from an empty document ``{}``, and for each fragment in
-       order check required variables, render templates with the RESOLVED
-       variables, apply operations in listed order while recording provenance,
-       evaluating ``assert`` operations as encountered;
+    4. for each produced output, independently: add the reserved ``output``
+       variable (this output's own name; see
+       :data:`yaml_frag.inventory.RESERVED_VARIABLE_NAMES`) to a per-output copy
+       of the resolved variables, load + validate its referenced fragments,
+       start from an empty document ``{}``, and for each fragment in order
+       check required variables, render templates with the RESOLVED variables,
+       apply operations in listed order while recording provenance, evaluating
+       ``assert`` operations as encountered;
     5. per output, run generic validation (unresolved-marker check + optional
        ``output.schema``) unless ``validate`` is False;
     6. return the :class:`~models.RenderResult` holding one
@@ -113,6 +116,12 @@ def render_target(
     outputs: dict[str, RenderedOutput] = {}
 
     for output_name, refs in resolved.output_fragments.items():
+        # `output` is reserved (see inventory.RESERVED_VARIABLE_NAMES) and, unlike
+        # `target`, differs per output within the same target, so it's added to a
+        # per-output copy here rather than once in resolve_target.
+        output_variables: Variables = dict(variables)
+        output_variables["output"] = output_name
+
         doc: dict[str, YamlValue] = {}
         tracker = ProvenanceTracker()
 
@@ -120,7 +129,7 @@ def render_target(
             fragment = fragments_mod.load_fragment(fragments_dir, ref)
 
             for required_var in fragment.required_variables:
-                if required_var not in variables:
+                if required_var not in output_variables:
                     raise TemplateRenderError(
                         f"{target_name}: fragment {fragment.name}: missing required "
                         f"variable {required_var!r}"
@@ -129,7 +138,7 @@ def render_target(
             for index, op in enumerate(fragment.operations):
                 rendered_value = templating.render_value(
                     op.value,
-                    variables,
+                    output_variables,
                     target=target_name,
                     fragment=fragment.name,
                     operation_index=index,
@@ -137,7 +146,7 @@ def render_target(
                 rendered_assertion = {
                     key: templating.render_value(
                         value,
-                        variables,
+                        output_variables,
                         target=target_name,
                         fragment=fragment.name,
                         operation_index=index,

@@ -39,6 +39,14 @@ from .models import (
 )
 from .yamlio import load_file
 
+#: Variable names the renderer sets automatically; a project must not define
+#: them itself (README.md "Variable precedence"). ``target`` is injected here,
+#: in :func:`resolve_target`, since it's the same for every output. ``output``
+#: is injected later, once per output, in :func:`yaml_frag.render.render_target`
+#: (it differs per output within the same target) — but conflicts with it are
+#: still rejected here, at the single point where all variable layers merge.
+RESERVED_VARIABLE_NAMES = frozenset({"target", "output"})
+
 
 def _parse_output_fragments(raw: dict[str, Any] | None) -> OutputFragments:
     """Parse an ``outputs:`` block (defaults/group/target) into name ->
@@ -160,9 +168,19 @@ def resolve_target(
     precedence layer; they are a named store referenced via ``from: secret`` and
     resolved later by :func:`yaml_frag.sources.resolve_variables`.
 
+    ``target`` and ``output`` are reserved variable names (see
+    :data:`RESERVED_VARIABLE_NAMES`). After layering, ``target`` is always set
+    to ``target_name`` here, so every fragment can reference the current
+    target via ``{{ target }}``. ``output`` is reserved the same way but is
+    per-output rather than per-target, so it isn't set until
+    :func:`yaml_frag.render.render_target` renders each output — this function
+    only rejects a layer that tries to define either name, since that's the
+    single point where all variable layers merge and the conflict would
+    otherwise be silently discarded (README.md "Variable precedence").
+
     Raise :class:`~yaml_frag.errors.UnknownTargetError` for an unknown target
     and :class:`~yaml_frag.errors.InventoryError` for a referenced-but-undefined
-    group.
+    group or an attempt to define a reserved variable name.
     """
     target = inventory.targets.get(target_name)
     if target is None:
@@ -189,6 +207,17 @@ def resolve_target(
 
     if cli_variables:
         variables.update(cli_variables)
+
+    reserved_conflicts = RESERVED_VARIABLE_NAMES & variables.keys()
+    if reserved_conflicts:
+        raise InventoryError(
+            f"target {target_name!r}: variable name(s) "
+            f"{', '.join(f'`{name}`' for name in sorted(reserved_conflicts))} "
+            f"are reserved (set automatically to the target's own name / the "
+            f"current output's name) and must not be defined in defaults/group/"
+            f"target variables or --var"
+        )
+    variables["target"] = target_name
 
     return ResolvedTarget(
         name=target_name,

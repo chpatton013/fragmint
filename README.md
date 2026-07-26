@@ -321,6 +321,19 @@ below). Resolution of sources happens once, *after* layering and *before*
 templating. Secrets are not a precedence layer; they are a named store
 referenced explicitly.
 
+**Reserved: `target`, `output`.** After layering, `target` is always set to
+the current target's own name, so any fragment can reference it via `{{
+target }}` — shared across every output the target produces, same as any
+other variable. `output` is reserved the same way, but is set to the current
+*output's* own name (e.g. `user-data`, `meta-data`) rather than the target's —
+since a target's fragment list, and therefore the value of `{{ output }}`, is
+independent per output, this is set once per output during rendering rather
+than once per target like `target` is. Because both are set unconditionally
+after every other layer (including CLI overrides), defining a variable named
+`target` or `output` anywhere (`defaults`, a group, the target itself, or
+`--var target=...`/`--var output=...`) is a fail-closed `InventoryError`
+rather than being silently discarded.
+
 ## Variable value sources
 
 A variable's value is one of three sources, distinguished by an optional

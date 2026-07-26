@@ -316,6 +316,105 @@ operations:
         )
 
 
+def test_fragment_can_reference_current_target_name(
+    config_path: Path,
+    secrets_example_path: Path,
+    stub_runner,
+    tmp_path: Path,
+) -> None:
+    """A fragment can reference the current target's own name via the
+    reserved `{{ target }}` variable."""
+    inventory_path = tmp_path / "targets.yaml"
+    inventory_path.write_text(
+        """
+version: 1
+targets:
+  my-target:
+    outputs:
+      user-data:
+        fragments:
+          - names-itself
+    variables: {}
+"""
+    )
+    frag_dir = tmp_path / "frags"
+    frag_dir.mkdir()
+    (frag_dir / "names-itself.yaml").write_text(
+        """
+fragment:
+  version: 1
+  description: echoes the reserved target variable
+operations:
+  - op: set
+    path: /whoami
+    value: "{{ target }}"
+"""
+    )
+
+    cfg = config_mod.load_config(config_path)
+    result = render_mod.render_target(
+        "my-target",
+        config=cfg,
+        inventory_path=inventory_path,
+        fragments_dir=frag_dir,
+        secrets_path=secrets_example_path,
+        runner=stub_runner,
+    )
+    assert result.outputs["user-data"].document["whoami"] == "my-target"
+
+
+def test_fragment_can_reference_current_output_name(
+    config_path: Path,
+    secrets_example_path: Path,
+    stub_runner,
+    tmp_path: Path,
+) -> None:
+    """A fragment shared by two outputs of the same target sees a different
+    `{{ output }}` value for each — it's reserved per output, not per target."""
+    inventory_path = tmp_path / "targets.yaml"
+    inventory_path.write_text(
+        """
+version: 1
+defaults:
+  outputs:
+    user-data:
+      fragments:
+        - names-its-output
+    meta-data:
+      fragments:
+        - names-its-output
+targets:
+  my-target:
+    variables: {}
+"""
+    )
+    frag_dir = tmp_path / "frags"
+    frag_dir.mkdir()
+    (frag_dir / "names-its-output.yaml").write_text(
+        """
+fragment:
+  version: 1
+  description: echoes the reserved output variable
+operations:
+  - op: set
+    path: /which-output
+    value: "{{ output }}"
+"""
+    )
+
+    cfg = config_mod.load_config(config_path)
+    result = render_mod.render_target(
+        "my-target",
+        config=cfg,
+        inventory_path=inventory_path,
+        fragments_dir=frag_dir,
+        secrets_path=secrets_example_path,
+        runner=stub_runner,
+    )
+    assert result.outputs["user-data"].document["which-output"] == "user-data"
+    assert result.outputs["meta-data"].document["which-output"] == "meta-data"
+
+
 def test_deterministic_output(
     config_path: Path,
     inventory_path: Path,
