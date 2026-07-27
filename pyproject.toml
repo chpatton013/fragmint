@@ -33,7 +33,7 @@ yaml-frag = "yaml_frag.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-yaml_frag = ["py.typed"]
+yaml_frag = ["py.typed", "schemas/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

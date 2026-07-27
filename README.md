@@ -68,7 +68,7 @@ This installs the `yaml-frag` command.
 
 ## Repository structure
 
-`yaml-frag` the tool (`src/yaml_frag/`, `schemas/`) is separate from any
+`yaml-frag` the tool (`src/yaml_frag/`, including `src/yaml_frag/schemas/`) is separate from any
 particular project that uses it. A **project** is just a directory containing
 a `yaml-frag.yaml` plus whatever inventory, fragments, and templates it needs —
 nothing about its internal layout is baked into the tool, and it can be
@@ -96,9 +96,9 @@ under any nested path and are referenced by their path relative to the
 fragments directory. The tool itself lives alongside it:
 
 ```
-schemas/         JSON schemas for inventory, fragment, project, and secrets files.
-src/yaml_frag/   The package (see "Modules" below).
-tests/           Unit, inventory, config, snapshot, and CLI tests + fixtures.
+src/yaml_frag/           The package (see "Modules" below).
+src/yaml_frag/schemas/   JSON schemas for inventory, fragment, project, and secrets files.
+tests/                   Unit, inventory, config, snapshot, and CLI tests + fixtures.
 ```
 
 ### Modules

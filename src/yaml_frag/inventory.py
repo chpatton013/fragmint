@@ -59,8 +59,8 @@ def _parse_output_fragments(raw: dict[str, Any] | None) -> OutputFragments:
 
 
 def _schema_path(name: str) -> Path:
-    """Resolve a project-shipped tool-format schema under ``<repo>/schemas/``."""
-    return Path(__file__).resolve().parents[2] / "schemas" / name
+    """Resolve a packaged tool-format schema under ``yaml_frag/schemas/``."""
+    return Path(__file__).resolve().parent / "schemas" / name
 
 
 def load_inventory(path: Path) -> Inventory:
