@@ -18,12 +18,18 @@ dependencies = [
     "pydantic>=2.6",
 ]
 
-[project.optional-dependencies]
+# Development tooling, as a PEP 735 dependency group rather than an extra:
+# `uv sync`/`uv run` install the `dev` group automatically, so `uv run pytest`
+# works straight after a clone. Consumers installing the package never see it.
+# See README.md "Development".
+[dependency-groups]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.1",
     "mypy>=1.9",
     "ruff>=0.4",
+    # mypy runs in strict mode and jsonschema ships no inline types.
+    "types-jsonschema>=4.21",
 ]
 
 [project.scripts]

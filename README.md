@@ -57,14 +57,40 @@ This README is the authoritative reference for the tool's design and usage.
 
 ## Installation
 
-Requires Python 3.12+.
+Requires Python 3.12+. Either tool works; pick whichever you already use. Both
+give you the same `yaml-frag` command. `yaml-frag` is not on PyPI yet, so the
+commands below install from a Git checkout or the repository URL.
+
+**With [uv](https://docs.astral.sh/uv/).** Install it as a standalone tool,
+which puts `yaml-frag` on your `PATH` in its own isolated environment:
+
+```bash
+uv tool install git+https://github.com/chpatton013/yaml-frag
+yaml-frag --help
+```
+
+Or skip installing altogether and run it straight from the repository —
+convenient in CI, or for a one-off render:
+
+```bash
+uvx --from git+https://github.com/chpatton013/yaml-frag yaml-frag --help
+```
+
+Both accept a local path in place of the URL (`uv tool install .`,
+`uvx --from . yaml-frag ...`), which is what you want while editing fragments
+in a checkout.
+
+**With pip.** Nothing about `yaml-frag` requires uv; a plain virtualenv is
+fine:
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e '.[dev]'
+pip install git+https://github.com/chpatton013/yaml-frag
 ```
 
-This installs the `yaml-frag` command.
+Or `pip install -e .` from a checkout, to run against your working tree. For
+the full contributor setup — the same thing plus the test, lint, and
+type-check tooling — see "Development" at the end of this file.
 
 ## Repository structure
 
@@ -1188,11 +1214,37 @@ dependency declarations; optional fragment conditions.
 
 ## Development
 
+The contributor workflow is [uv](https://docs.astral.sh/uv/). One command
+creates the virtualenv, installs the package editable, and installs the `dev`
+dependency group (pytest, mypy, ruff), pinned by the committed `uv.lock`:
+
 ```bash
-pytest            # full test suite
-mypy src          # type checking (strict)
-ruff check .      # lint
+uv sync
 ```
+
+Then:
+
+```bash
+uv run pytest            # full test suite
+uv run mypy src          # type checking (strict)
+uv run ruff check .      # lint
+```
+
+All three must pass; CI runs exactly these three commands (see
+`.github/workflows/ci.yml`). `uv run` re-syncs first, so it picks up a changed
+`pyproject.toml` without a separate step. Add or change a dependency with
+`uv add` / `uv add --dev`, which updates `pyproject.toml` and `uv.lock`
+together — commit both.
+
+`uv.lock` is committed so development and CI resolve identically. It has no
+effect on anyone installing the published package: a lockfile is ignored when
+a project is consumed as a dependency, so it constrains only this repo's own
+environments.
+
+Not using uv is fine — the tooling is ordinary. With pip 25.1+, `pip install
+-e . --group dev` installs the same set into an activated virtualenv, and the
+three commands above work without the `uv run` prefix. You just won't get the
+locked versions.
 
 Tests are organized by concern: `test_merge.py` (merge operations, pointer,
 templating, provenance), `test_inventory.py` (precedence and ordering),
