@@ -17,6 +17,7 @@ from yaml_frag.errors import (
 )
 from yaml_frag.models import FragmentOperation, ProvenanceEntry
 from yaml_frag.provenance import ProvenanceTracker
+from yaml_frag.render import _render_operation_path
 
 
 def _entry(fragment: str = "frag", operation_index: int = 0, op: str = "set") -> ProvenanceEntry:
@@ -411,3 +412,76 @@ def test_templating_allowed_filters_only() -> None:
         templating.render_value(
             "{{ ''.__class__ }}", {}, target="t", fragment="f", operation_index=0
         )
+
+
+# --- Templated operation paths (README.md "Template rendering", "Paths") ---
+
+
+def test_render_operation_path_happy_path() -> None:
+    """A template in a position (not just a value) renders to a valid pointer."""
+    result = _render_operation_path(
+        "/all/children/{{ ansible_group }}/hosts/{{ target }}",
+        {"ansible_group": "gb10", "target": "gb10-01"},
+        target="gb10-01",
+        fragment="ansible/host",
+        operation_index=0,
+    )
+    assert result == "/all/children/gb10/hosts/gb10-01"
+
+
+def test_render_operation_path_literal_path_unchanged() -> None:
+    """A path with no template syntax renders through unchanged."""
+    result = _render_operation_path(
+        "/autoinstall/kernel",
+        {},
+        target="t",
+        fragment="f",
+        operation_index=0,
+    )
+    assert result == "/autoinstall/kernel"
+
+
+def test_render_operation_path_missing_variable_fails_closed() -> None:
+    """A missing variable referenced from a path fails closed, naming the
+    fragment/operation, exactly like a missing variable in a value."""
+    with pytest.raises(TemplateRenderError) as excinfo:
+        _render_operation_path(
+            "/all/children/{{ ansible_group }}/hosts/{{ target }}",
+            {"target": "gb10-01"},
+            target="gb10-01",
+            fragment="ansible/host",
+            operation_index=3,
+        )
+    message = str(excinfo.value)
+    assert "ansible/host" in message
+    assert "3" in message
+    assert "ansible_group" in message
+
+
+def test_render_operation_path_non_string_result_fails_closed() -> None:
+    """A template that renders to a non-string (e.g. a whole-expression
+    reference to a boolean/number/mapping variable) is rejected before
+    `pointer.set_` ever sees it."""
+    with pytest.raises(TemplateRenderError) as excinfo:
+        _render_operation_path(
+            "{{ not_a_string }}",
+            {"not_a_string": 42},
+            target="t",
+            fragment="f",
+            operation_index=0,
+        )
+    assert "must render to a string" in str(excinfo.value)
+
+
+def test_render_operation_path_malformed_pointer_result_fails_closed() -> None:
+    """A template that renders to a string that isn't a valid JSON Pointer
+    (doesn't start with `/`) is rejected before `pointer.set_` ever sees it."""
+    with pytest.raises(TemplateRenderError) as excinfo:
+        _render_operation_path(
+            "{{ bad_path }}",
+            {"bad_path": "no-leading-slash"},
+            target="t",
+            fragment="f",
+            operation_index=0,
+        )
+    assert "not a valid JSON Pointer" in str(excinfo.value)

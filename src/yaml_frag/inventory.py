@@ -47,6 +47,13 @@ from .yamlio import load_file
 #: still rejected here, at the single point where all variable layers merge.
 RESERVED_VARIABLE_NAMES = frozenset({"target", "output"})
 
+#: Characters a target name must not contain because they would corrupt a
+#: JSON Pointer once substituted into an operation path (README.md
+#: "Aggregate outputs" and "Paths": `/` separates pointer tokens and `~`
+#: begins an escape sequence). Rejected at load time, per-target, rather than
+#: escaped on substitution, for a clearer error at the clearer point of fault.
+POINTER_HOSTILE_CHARACTERS = ("/", "~")
+
 
 def _parse_output_fragments(raw: dict[str, Any] | None) -> OutputFragments:
     """Parse an ``outputs:`` block (defaults/group/target) into name ->
@@ -114,6 +121,14 @@ def load_inventory(path: Path) -> Inventory:
     targets: dict[str, TargetDefinition] = {}
     targets_raw = doc.get("targets", {}) or {}
     for name, target_raw in targets_raw.items():
+        if any(char in name for char in POINTER_HOSTILE_CHARACTERS):
+            raise InventoryError(
+                f"inventory {path}: target name {name!r} must not contain "
+                f"{' or '.join(repr(c) for c in POINTER_HOSTILE_CHARACTERS)} — "
+                f"it would corrupt a JSON Pointer once substituted into an "
+                f"operation path (e.g. via the reserved `{{{{ target }}}}` "
+                f"variable in a templated path)"
+            )
         target_raw = target_raw or {}
         target_groups = tuple(target_raw.get("groups", []) or [])
         for group_name in target_groups:
@@ -164,7 +179,7 @@ def resolve_target(
         4. ``cli_variables`` (always literal strings)
 
     The returned ``variables`` are LAYERED BUT UNRESOLVED: a value may be an
-    untagged literal or a ``from:`` source mapping. Secrets are no longer a
+    untagged literal or a ``from:`` source mapping. Secrets are not a
     precedence layer; they are a named store referenced via ``from: secret`` and
     resolved later by :func:`yaml_frag.sources.resolve_variables`.
 

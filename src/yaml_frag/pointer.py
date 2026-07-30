@@ -2,14 +2,13 @@
 
 Paths address locations in the merged document. See README.md "Paths".
 
-Rules to implement:
+Rules:
 - ``/`` addresses the root document.
 - ``/a/b/c`` addresses nested mapping keys ``a`` -> ``b`` -> ``c``.
-- Array indexes are NOT supported in this version; a purely-numeric key is
-  still treated as a mapping key, not a list index.
-- JSON Pointer escaping: ``~1`` decodes to ``/`` and ``~0`` decodes to ``~``.
-  Decode ``~1`` before ``~0`` is NOT correct; per RFC 6901 replace ``~1`` then
-  ``~0`` — follow the spec exactly.
+- Array indexes are NOT supported; a purely-numeric key is still treated as a
+  mapping key, not a list index.
+- JSON Pointer escaping: ``~1`` decodes to ``/`` and ``~0`` decodes to ``~``,
+  decoded in that order per RFC 6901.
 
 This module is intentionally small and pure (no I/O, no YAML), so it can be
 unit-tested in isolation (see ``tests/test_merge.py``'s JSON-Pointer-escaping
@@ -33,8 +32,8 @@ def parse_pointer(pointer: str) -> tuple[str, ...]:
     ``"/"`` and ``""`` both denote the root and return ``()``.
     ``"/a/b~1c"`` returns ``("a", "b/c")``.
 
-    Raise :class:`~yaml_frag.errors.YamlFragError` (or a suitable
-    subclass) if the pointer does not start with ``/`` and is not empty.
+    Raises :class:`~yaml_frag.errors.YamlFragError` if the pointer does not
+    start with ``/`` and is not empty.
     """
     if pointer in ("", "/"):
         return ()
@@ -49,10 +48,10 @@ def get(document: YamlValue, pointer: str) -> tuple[bool, YamlValue]:
     """Look up ``pointer`` in ``document``.
 
     Return ``(True, value)`` when the path exists, else ``(False, None)``.
-    Must not raise for a missing intermediate key; that is a normal "absent"
-    result. Do raise if an intermediate node exists but is not a mapping and
-    the caller needs to descend through it (decide and document the exact
-    behavior when implementing; be conservative).
+    A missing intermediate key is a normal "absent" result, not an error, and
+    so is an intermediate node that exists but is not a mapping — descending
+    through a scalar or list simply reports the path as absent. Lookup never
+    raises; only mutation (:func:`set_`, :func:`delete`) reports conflicts.
     """
     tokens = parse_pointer(pointer)
     node: YamlValue = document

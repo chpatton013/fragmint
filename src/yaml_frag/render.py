@@ -2,14 +2,29 @@
 
 Ties together project config, inventory resolution, fragment loading,
 templating, merge operations, provenance, validation, serialization, and output
-templating. See README.md "Rendering algorithm".
+templating. See README.md "Rendering algorithm" (per-target composition) and
+"Aggregate outputs" (the second, small composition loop this module adds for
+``scope: aggregate`` outputs).
+
+:class:`RenderSession` owns the once-per-run work — loading the inventory and
+secret store, and memoizing each target's resolved/resolved-and-source-resolved
+variables and each fragment reference — so a single CLI invocation that
+touches many targets (``render-all``, or any aggregate output, which by
+construction visits every target) reads the inventory once and runs each
+target's variable-value captures at most once, regardless of how many outputs
+(per-target or aggregate) end up consuming them. :func:`render_target` is a
+thin wrapper over it — "build a session, render one target" — for callers that
+only need a single target.
 
 The functions here are pure with respect to the filesystem where practical:
-:func:`render_target` returns a :class:`~models.RenderResult` (in-memory,
-one :class:`~models.RenderedOutput` per output the target produces),
-:func:`compose_output` turns a single output's result into final output text,
-and :func:`write_output` handles the atomic on-disk write separately so
-``validate``/``inspect``/``--stdout`` can render without writing.
+:func:`render_target` and :meth:`RenderSession.render_target_outputs` return a
+:class:`~models.RenderResult` (in-memory, one :class:`~models.RenderedOutput`
+per output the target produces), :meth:`RenderSession.render_aggregate`
+returns a single :class:`~models.RenderedOutput` (or ``None`` if no target
+contributed), :func:`compose_output` turns a single output's result into
+final output text, and :func:`write_output` handles the atomic on-disk write
+separately so ``validate``/``inspect``/``--stdout`` can render without
+writing.
 """
 
 from __future__ import annotations
@@ -20,19 +35,19 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import fragments as fragments_mod
-from . import merge
-from . import sources
-from . import templating
-from . import validation
-from . import yamlio
-from .errors import ConfigError, TemplateRenderError
+from . import merge, sources, templating, validation, yamlio
+from . import pointer as pointer_mod
+from .errors import ConfigError, TemplateRenderError, YamlFragError
 from .inventory import load_inventory, load_secret_store, resolve_target
 from .models import (
+    Fragment,
+    Inventory,
     OutputSpec,
     ProjectConfig,
     ProvenanceEntry,
     RenderedOutput,
     RenderResult,
+    ResolvedTarget,
     SecretStore,
     Variables,
     YamlValue,
@@ -49,6 +64,337 @@ DOCUMENT_TOKEN = "{{ document }}"
 REDACT_SUBSTRINGS = ("password", "secret", "token", "private", "credential")
 
 
+def _render_operation_path(
+    path: str,
+    variables: Variables,
+    *,
+    target: str,
+    fragment: str,
+    operation_index: int,
+) -> str:
+    """Render an operation's ``path`` through templating and validate it.
+
+    See README.md "Template rendering" and "Paths". A templated path (e.g.
+    ``/all/children/{{ ansible_group }}/hosts/{{ target }}``, the case
+    "Aggregate outputs" needs) must render to a *string* that is itself a
+    valid JSON Pointer — checked here, BEFORE :mod:`merge`/:mod:`pointer` ever
+    see the result, so a malformed pointer or a non-string template result
+    fails closed with the fragment name and operation index rather than
+    surfacing as an unrelated-looking pointer error deeper in the stack.
+    Raises :class:`~yaml_frag.errors.TemplateRenderError` in either failure
+    case.
+    """
+    rendered = templating.render_value(
+        path, variables, target=target, fragment=fragment, operation_index=operation_index
+    )
+    if not isinstance(rendered, str):
+        raise TemplateRenderError(
+            f"{target}: fragment {fragment}, operation {operation_index}: templated "
+            f"path must render to a string, got {type(rendered).__name__} ({rendered!r})"
+        )
+    try:
+        pointer_mod.parse_pointer(rendered)
+    except YamlFragError as exc:
+        raise TemplateRenderError(
+            f"{target}: fragment {fragment}, operation {operation_index}: templated "
+            f"path {rendered!r} is not a valid JSON Pointer: {exc}"
+        ) from exc
+    return rendered
+
+
+class RenderSession:
+    """Config + inventory + secret store loaded once for a whole run.
+
+    See README.md "Rendering algorithm" and "Aggregate outputs". A session is
+    constructed once per CLI invocation (or once per test) and reused across
+    every target/output it touches:
+
+    - :meth:`resolve` memoizes each target's :class:`~models.ResolvedTarget`
+      (per-output fragment order + layered-but-unresolved variables);
+    - :meth:`variables` memoizes each target's fully SOURCE-RESOLVED variable
+      map, so a ``from: capture`` subprocess runs at most once per target per
+      session regardless of how many outputs consume it — this is the point
+      that keeps ``render-all`` (and aggregate rendering, which visits every
+      target by construction) from re-running captures per output;
+    - fragment loading (:meth:`_load_fragment`) is memoized too, so a fragment
+      shared by many targets (the common case for an aggregate output, e.g.
+      ``ansible/host``) is read and schema-validated once, not once per
+      target.
+
+    :func:`render_target` is a thin wrapper that builds a one-shot session and
+    renders a single target.
+    """
+
+    def __init__(
+        self,
+        config: ProjectConfig,
+        inventory_path: Path,
+        fragments_dir: Path,
+        *,
+        cli_variables: Variables | None = None,
+        secrets_path: Path | None = None,
+        runner: CommandRunner | None = None,
+        redact_sources: bool = False,
+    ) -> None:
+        self.config = config
+        self.fragments_dir = fragments_dir
+        self.cli_variables = cli_variables
+        self.runner = runner
+        self.redact_sources = redact_sources
+        self.inventory: Inventory = load_inventory(inventory_path)
+        self.store: SecretStore = (
+            load_secret_store(secrets_path) if secrets_path is not None else SecretStore()
+        )
+        self._resolved: dict[str, ResolvedTarget] = {}
+        self._variables: dict[str, Variables] = {}
+        self._fragments: dict[str, Fragment] = {}
+
+    def resolve(self, target_name: str) -> ResolvedTarget:
+        """Resolve ``target_name``'s per-output fragment order and layered
+        (still-unresolved) variables, memoized for the life of the session.
+
+        Every output name the target's inventory routing references must
+        exist in ``self.config.outputs`` — raises
+        :class:`~yaml_frag.errors.ConfigError` otherwise (README.md
+        "Rendering algorithm" step 3).
+        """
+        if target_name not in self._resolved:
+            resolved = resolve_target(
+                self.inventory, target_name, cli_variables=self.cli_variables
+            )
+            for output_name in resolved.output_fragments:
+                if output_name not in self.config.outputs:
+                    raise ConfigError(
+                        f"{target_name}: inventory references output {output_name!r}, "
+                        f"which is not declared in the project configuration's `outputs`"
+                    )
+            self._resolved[target_name] = resolved
+        return self._resolved[target_name]
+
+    def variables(self, target_name: str) -> Variables:
+        """This target's layered variables with every value source resolved
+        (secrets looked up, captures run via ``self.runner``), memoized so a
+        capture subprocess runs at most once per target for the life of the
+        session — shared across every output (per-target or aggregate) that
+        consumes it. See README.md "Variable value sources"."""
+        if target_name not in self._variables:
+            resolved = self.resolve(target_name)
+            self._variables[target_name] = sources.resolve_variables(
+                resolved.variables,
+                secrets=self.store,
+                runner=self.runner,
+                target=target_name,
+                redact=self.redact_sources,
+            )
+        return self._variables[target_name]
+
+    def _load_fragment(self, ref: str) -> Fragment:
+        """Load + validate a fragment by reference, memoized for the life of
+        the session (README.md "Aggregate outputs": otherwise a fragment
+        shared by many targets would be re-read and re-validated once per
+        target)."""
+        if ref not in self._fragments:
+            self._fragments[ref] = fragments_mod.load_fragment(self.fragments_dir, ref)
+        return self._fragments[ref]
+
+    def _apply_fragment(
+        self,
+        doc: dict[str, YamlValue],
+        tracker: ProvenanceTracker,
+        *,
+        target_name: str,
+        fragment: Fragment,
+        variables: Variables,
+        provenance_target: str | None,
+    ) -> None:
+        """Apply one fragment's operations to ``doc`` in listed order:
+        check required variables; render each operation's path/value/assertion
+        through templating; apply the operation, recording provenance.
+
+        ``provenance_target`` is recorded on every
+        :class:`~models.ProvenanceEntry` produced — ``None`` for per-target
+        rendering (redundant there: there's only one target in play), the
+        contributing target's name for aggregate rendering, where the same
+        fragment runs once per target and "fragment X operation 0" alone no
+        longer identifies a single write (README.md "Aggregate outputs").
+        """
+        for required_var in fragment.required_variables:
+            if required_var not in variables:
+                raise TemplateRenderError(
+                    f"{target_name}: fragment {fragment.name}: missing required "
+                    f"variable {required_var!r}"
+                )
+
+        for index, op in enumerate(fragment.operations):
+            rendered_path = _render_operation_path(
+                op.path,
+                variables,
+                target=target_name,
+                fragment=fragment.name,
+                operation_index=index,
+            )
+            rendered_value = templating.render_value(
+                op.value,
+                variables,
+                target=target_name,
+                fragment=fragment.name,
+                operation_index=index,
+            )
+            rendered_assertion = {
+                key: templating.render_value(
+                    value,
+                    variables,
+                    target=target_name,
+                    fragment=fragment.name,
+                    operation_index=index,
+                )
+                for key, value in op.assertion.items()
+            }
+            rendered_op = replace(
+                op, path=rendered_path, value=rendered_value, assertion=rendered_assertion
+            )
+            entry = ProvenanceEntry(
+                fragment=fragment.name,
+                operation_index=index,
+                operation=op.op,
+                target=provenance_target,
+            )
+            merge.apply_operation(doc, rendered_op, entry=entry, tracker=tracker)
+
+    def _validate_document(self, doc: dict[str, YamlValue], output: OutputSpec) -> None:
+        """Generic structural validation shared by per-target and aggregate
+        rendering (README.md "Validation"): reject unresolved template
+        markers, then optionally validate against ``output.schema``."""
+        validation.check_unresolved_markers(doc)
+        if output.schema:
+            validation.validate_against_schema(doc, Path(output.schema))
+
+    def render_target_outputs(self, target_name: str, *, validate: bool = True) -> RenderResult:
+        """Render every PER-TARGET output ``target_name`` produces, in memory
+        (README.md "Rendering algorithm").
+
+        For each produced output, independently: add the reserved ``output``
+        variable to a per-output copy of this target's resolved variables,
+        load + validate its referenced fragments, start from an empty
+        document, and apply each fragment's operations in order via
+        :meth:`_apply_fragment`. Runs generic validation per output unless
+        ``validate`` is ``False``.
+
+        Outputs with ``scope: aggregate`` are skipped here even if this
+        target contributes fragments to one — they're composed once for the
+        whole run by :meth:`render_aggregate`, never per target (README.md
+        "Aggregate outputs": ``render TARGET`` silently skips them).
+        """
+        resolved = self.resolve(target_name)
+        variables = self.variables(target_name)
+
+        outputs: dict[str, RenderedOutput] = {}
+        for output_name, refs in resolved.output_fragments.items():
+            output = self.config.outputs[output_name]
+            if output.scope == "aggregate":
+                continue
+
+            # `output` is reserved (see inventory.RESERVED_VARIABLE_NAMES) and,
+            # unlike `target`, differs per output within the same target, so
+            # it's added to a per-output copy here rather than once per target.
+            output_variables: Variables = dict(variables)
+            output_variables["output"] = output_name
+
+            doc: dict[str, YamlValue] = {}
+            tracker = ProvenanceTracker()
+            for ref in refs:
+                fragment = self._load_fragment(ref)
+                self._apply_fragment(
+                    doc,
+                    tracker,
+                    target_name=target_name,
+                    fragment=fragment,
+                    variables=output_variables,
+                    provenance_target=None,
+                )
+
+            if validate:
+                self._validate_document(doc, output)
+
+            outputs[output_name] = RenderedOutput(
+                name=output_name,
+                document=doc,
+                provenance=tracker.entries,
+                overrides=tuple(tracker.overrides),
+            )
+
+        return RenderResult(target=target_name, outputs=outputs)
+
+    def render_aggregate(self, output_name: str, *, validate: bool = True) -> RenderedOutput | None:
+        """Compose the single document for ``output_name`` (``scope:
+        aggregate``) from every target that contributes to it, for the whole
+        run (README.md "Aggregate outputs").
+
+        Targets are visited in inventory declaration order (never sorted); a
+        target that contributes no fragments for this output is simply
+        skipped (its opt-out). For each contributing target, its resolved
+        fragment list for this output is applied to the SHARED document in
+        turn, in that target's fragment order — the same positional-precedence
+        rule as per-target rendering, applied across targets instead of
+        within one, so a later target's write can override an earlier
+        target's contribution at the same path (and an unintended collision
+        surfaces as the normal override warning, now naming both targets).
+
+        Returns ``None`` — nothing to write — if no target contributed
+        (README.md "Fragment order": an output nothing feeds is not
+        produced). Runs generic validation (unresolved-marker check + optional
+        ``output.schema``) on the finished document unless ``validate`` is
+        ``False``; note that any ``assert`` operation inside a fragment
+        contributing to an aggregate output only ever sees the PARTIAL
+        document built so far (up through the current target) — whole-document
+        assertions for an aggregate output must go through ``schema`` or a
+        named validator instead (README.md "Aggregate outputs").
+        """
+        output = self.config.outputs[output_name]
+        if output.scope != "aggregate":
+            raise ConfigError(
+                f"output {output_name!r} has scope {output.scope!r}, not `aggregate`"
+            )
+
+        doc: dict[str, YamlValue] = {}
+        tracker = ProvenanceTracker()
+        contributed = False
+
+        for target_name in self.inventory.targets:
+            resolved = self.resolve(target_name)
+            refs = resolved.output_fragments.get(output_name)
+            if not refs:
+                continue
+            contributed = True
+
+            variables: Variables = dict(self.variables(target_name))
+            variables["output"] = output_name
+
+            for ref in refs:
+                fragment = self._load_fragment(ref)
+                self._apply_fragment(
+                    doc,
+                    tracker,
+                    target_name=target_name,
+                    fragment=fragment,
+                    variables=variables,
+                    provenance_target=target_name,
+                )
+
+        if not contributed:
+            return None
+
+        if validate:
+            self._validate_document(doc, output)
+
+        return RenderedOutput(
+            name=output_name,
+            document=doc,
+            provenance=tracker.entries,
+            overrides=tuple(tracker.overrides),
+        )
+
+
 def render_target(
     target_name: str,
     *,
@@ -61,31 +407,14 @@ def render_target(
     validate: bool = True,
     redact_sources: bool = False,
 ) -> RenderResult:
-    """Render a single target's every produced output in memory.
+    """Render a single target's every produced PER-TARGET output in memory.
 
-    Steps (README.md "Rendering algorithm"):
-    1. load + validate inventory;
-    2. resolve defaults/groups/target (per-output fragment order +
-       LAYERED-but-unresolved variable map) via :func:`inventory.resolve_target`;
-       every output name it produces must be declared in ``config.outputs``
-       (raise :class:`~yaml_frag.errors.ConfigError` otherwise);
-    3. load the secret store from ``secrets_path`` (empty if not given), then
-       resolve every variable source to a concrete value via
-       :func:`yaml_frag.sources.resolve_variables` (executing any ``capture``
-       subprocesses through ``runner``, default :class:`~sources.DefaultCommandRunner`)
-       — once, shared across every output;
-    4. for each produced output, independently: add the reserved ``output``
-       variable (this output's own name; see
-       :data:`yaml_frag.inventory.RESERVED_VARIABLE_NAMES`) to a per-output copy
-       of the resolved variables, load + validate its referenced fragments,
-       start from an empty document ``{}``, and for each fragment in order
-       check required variables, render templates with the RESOLVED variables,
-       apply operations in listed order while recording provenance, evaluating
-       ``assert`` operations as encountered;
-    5. per output, run generic validation (unresolved-marker check + optional
-       ``output.schema``) unless ``validate`` is False;
-    6. return the :class:`~models.RenderResult` holding one
-       :class:`~models.RenderedOutput` per produced output.
+    Thin wrapper over :class:`RenderSession`: build a one-shot session and
+    render just this target (``session.render_target_outputs(target_name,
+    validate=validate)``). Use it when a caller only ever renders one target
+    and has no reason to hold a session; construct a :class:`RenderSession`
+    directly to render several targets, or any aggregate output, without
+    re-reading the inventory. See README.md "Rendering algorithm".
 
     ``runner`` is injectable so tests can resolve captures deterministically
     without running real programs. When ``redact_sources`` is true, secret and
@@ -93,86 +422,20 @@ def render_target(
     looked up or run — used by ``explain`` so it never executes captures or
     reveals secrets. Serialization and output templating happen in
     :func:`compose_output`, not here. No document-type knowledge lives here.
+    Aggregate-scoped outputs are never produced through this function, even if
+    ``target_name`` contributes fragments to one — see README.md "Aggregate
+    outputs" and :meth:`RenderSession.render_aggregate`.
     """
-    inventory = load_inventory(inventory_path)
-    resolved = resolve_target(inventory, target_name, cli_variables=cli_variables)
-
-    for output_name in resolved.output_fragments:
-        if output_name not in config.outputs:
-            raise ConfigError(
-                f"{target_name}: inventory references output {output_name!r}, "
-                f"which is not declared in the project configuration's `outputs`"
-            )
-
-    store = load_secret_store(secrets_path) if secrets_path is not None else SecretStore()
-    variables = sources.resolve_variables(
-        resolved.variables,
-        secrets=store,
+    session = RenderSession(
+        config,
+        inventory_path,
+        fragments_dir,
+        cli_variables=cli_variables,
+        secrets_path=secrets_path,
         runner=runner,
-        target=target_name,
-        redact=redact_sources,
+        redact_sources=redact_sources,
     )
-
-    outputs: dict[str, RenderedOutput] = {}
-
-    for output_name, refs in resolved.output_fragments.items():
-        # `output` is reserved (see inventory.RESERVED_VARIABLE_NAMES) and, unlike
-        # `target`, differs per output within the same target, so it's added to a
-        # per-output copy here rather than once in resolve_target.
-        output_variables: Variables = dict(variables)
-        output_variables["output"] = output_name
-
-        doc: dict[str, YamlValue] = {}
-        tracker = ProvenanceTracker()
-
-        for ref in refs:
-            fragment = fragments_mod.load_fragment(fragments_dir, ref)
-
-            for required_var in fragment.required_variables:
-                if required_var not in output_variables:
-                    raise TemplateRenderError(
-                        f"{target_name}: fragment {fragment.name}: missing required "
-                        f"variable {required_var!r}"
-                    )
-
-            for index, op in enumerate(fragment.operations):
-                rendered_value = templating.render_value(
-                    op.value,
-                    output_variables,
-                    target=target_name,
-                    fragment=fragment.name,
-                    operation_index=index,
-                )
-                rendered_assertion = {
-                    key: templating.render_value(
-                        value,
-                        output_variables,
-                        target=target_name,
-                        fragment=fragment.name,
-                        operation_index=index,
-                    )
-                    for key, value in op.assertion.items()
-                }
-                rendered_op = replace(op, value=rendered_value, assertion=rendered_assertion)
-                entry = ProvenanceEntry(
-                    fragment=fragment.name, operation_index=index, operation=op.op
-                )
-                merge.apply_operation(doc, rendered_op, entry=entry, tracker=tracker)
-
-        if validate:
-            validation.check_unresolved_markers(doc)
-            output_schema = config.outputs[output_name].schema
-            if output_schema:
-                validation.validate_against_schema(doc, Path(output_schema))
-
-        outputs[output_name] = RenderedOutput(
-            name=output_name,
-            document=doc,
-            provenance=tracker.entries,
-            overrides=tuple(tracker.overrides),
-        )
-
-    return RenderResult(target=target_name, outputs=outputs)
+    return session.render_target_outputs(target_name, validate=validate)
 
 
 def compose_output(result: RenderedOutput, output: OutputSpec) -> str:
@@ -183,6 +446,9 @@ def compose_output(result: RenderedOutput, output: OutputSpec) -> str:
     file and replace the literal :data:`DOCUMENT_TOKEN` with the serialized
     YAML; otherwise use the serialized YAML verbatim. This is how a project adds
     a header such as ``#cloud-config``. Ends with a single trailing newline.
+    Scope-agnostic: works identically for a per-target or an aggregate result
+    (README.md "Aggregate outputs": the aggregate path adds no new
+    serialization or templating code).
     """
     text = yamlio.dump_str(result.document)
 

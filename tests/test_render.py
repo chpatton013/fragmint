@@ -1,8 +1,10 @@
 """Rendering and snapshot tests.
 
-Snapshot fixtures live in tests/fixtures/expected/<target>/user-data. To
-regenerate them, render each target and write the output there, then review
-the diff before committing (see tests/fixtures/README.md).
+Snapshot fixtures live in tests/fixtures/expected/<target>/user-data (per
+target) and tests/fixtures/expected/ansible-inventory.yaml (the example
+project's `scope: aggregate` output, composed once across every target). To
+regenerate them, render and write the output there, then review the diff
+before committing (see tests/fixtures/README.md).
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ import pytest
 from yaml_frag import config as config_mod
 from yaml_frag import render as render_mod
 from yaml_frag.errors import AssertionFailedError, ConfigError, ValidationError
-from yaml_frag.models import OutputSpec
+from yaml_frag.models import OutputSpec, ProjectConfig
 
 SNAPSHOT_TARGETS = ["generic-vm-01", "gb10-01", "gb10-02"]
 
@@ -618,3 +620,369 @@ def test_write_output_never_leaves_partial_file_on_failure(tmp_path: Path, monke
     assert target_path.read_text() == "original\n"
     leftovers = [p for p in tmp_path.iterdir() if p.name != "user-data"]
     assert leftovers == []
+
+
+# --- Aggregate outputs (README.md "Aggregate outputs") ----------------------
+
+
+def _write_fragment(fragments_dir: Path, ref: str, body: str) -> None:
+    path = fragments_dir / f"{ref}.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body)
+
+
+def _aggregate_config(*, agg_path: Path, extra_outputs: dict[str, OutputSpec] | None = None) -> ProjectConfig:
+    outputs: dict[str, OutputSpec] = {
+        "combined": OutputSpec(path=str(agg_path), scope="aggregate"),
+    }
+    outputs.update(extra_outputs or {})
+    return ProjectConfig(
+        version=1,
+        inventory="unused",
+        fragments_dir="unused",
+        outputs=outputs,
+        default_output=None,
+    )
+
+
+def test_aggregate_composition_order_is_target_then_fragment_order(
+    tmp_path: Path, stub_runner
+) -> None:
+    """Aggregate composition visits targets in inventory declaration order
+    (never alphabetized) and, within each target, applies that target's
+    resolved fragment list in order — the same positional rule as per-target
+    rendering, across targets instead of within one."""
+    inventory_path = tmp_path / "targets.yaml"
+    inventory_path.write_text(
+        """
+version: 1
+targets:
+  second:
+    outputs:
+      combined:
+        fragments: [append-a, append-b]
+    variables: {}
+  first:
+    outputs:
+      combined:
+        fragments: [append-a, append-b]
+    variables: {}
+"""
+    )
+    frag_dir = tmp_path / "frags"
+    _write_fragment(
+        frag_dir,
+        "append-a",
+        """
+fragment:
+  version: 1
+  description: appends "<target>-a"
+operations:
+  - op: append
+    path: /log
+    value: ["{{ target }}-a"]
+""",
+    )
+    _write_fragment(
+        frag_dir,
+        "append-b",
+        """
+fragment:
+  version: 1
+  description: appends "<target>-b"
+operations:
+  - op: append
+    path: /log
+    value: ["{{ target }}-b"]
+""",
+    )
+
+    cfg = _aggregate_config(agg_path=tmp_path / "out.yaml")
+    session = render_mod.RenderSession(cfg, inventory_path, frag_dir, runner=stub_runner)
+    rendered = session.render_aggregate("combined")
+    assert rendered is not None
+    assert rendered.document["log"] == ["second-a", "second-b", "first-a", "first-b"]
+
+
+def test_aggregate_target_opt_out(tmp_path: Path, stub_runner) -> None:
+    """A target that contributes no fragments for an aggregate output simply
+    doesn't appear in it — that's the opt-out (README.md "Aggregate
+    outputs")."""
+    inventory_path = tmp_path / "targets.yaml"
+    inventory_path.write_text(
+        """
+version: 1
+targets:
+  contributes:
+    outputs:
+      combined:
+        fragments: [mark]
+    variables: {}
+  opts-out:
+    variables: {}
+"""
+    )
+    frag_dir = tmp_path / "frags"
+    _write_fragment(
+        frag_dir,
+        "mark",
+        """
+fragment:
+  version: 1
+  description: marks the contributing target
+operations:
+  - op: set
+    path: "/seen/{{ target }}"
+    value: true
+""",
+    )
+    cfg = _aggregate_config(agg_path=tmp_path / "out.yaml")
+    session = render_mod.RenderSession(cfg, inventory_path, frag_dir, runner=stub_runner)
+    rendered = session.render_aggregate("combined")
+    assert rendered is not None
+    assert rendered.document == {"seen": {"contributes": True}}
+
+
+def test_aggregate_no_contributors_is_not_produced(tmp_path: Path, stub_runner) -> None:
+    """If no target contributes to an aggregate output, it's not produced —
+    render_aggregate returns None, consistent with "an output no layer
+    contributes fragments to is not produced"."""
+    inventory_path = tmp_path / "targets.yaml"
+    inventory_path.write_text(
+        """
+version: 1
+targets:
+  t1:
+    variables: {}
+  t2:
+    variables: {}
+"""
+    )
+    frag_dir = tmp_path / "frags"
+    frag_dir.mkdir()
+    cfg = _aggregate_config(agg_path=tmp_path / "out.yaml")
+    session = render_mod.RenderSession(cfg, inventory_path, frag_dir, runner=stub_runner)
+    assert session.render_aggregate("combined") is None
+
+
+def test_aggregate_cross_target_override_warning_names_both_targets(
+    tmp_path: Path, stub_runner
+) -> None:
+    """Two targets writing the same path in an aggregate document is exactly
+    the "two targets claimed the same key" bug the override warning should
+    catch — and for aggregate scope the warning names both contributing
+    targets, not just fragment names (README.md "Aggregate outputs")."""
+    inventory_path = tmp_path / "targets.yaml"
+    inventory_path.write_text(
+        """
+version: 1
+targets:
+  host-a:
+    outputs:
+      combined:
+        fragments: [claim]
+    variables: {}
+  host-b:
+    outputs:
+      combined:
+        fragments: [claim]
+    variables: {}
+"""
+    )
+    frag_dir = tmp_path / "frags"
+    _write_fragment(
+        frag_dir,
+        "claim",
+        """
+fragment:
+  version: 1
+  description: both targets claim the same fixed key
+operations:
+  - op: set
+    path: /hosts/shared-key
+    value: "{{ target }}"
+""",
+    )
+    cfg = _aggregate_config(agg_path=tmp_path / "out.yaml")
+    session = render_mod.RenderSession(cfg, inventory_path, frag_dir, runner=stub_runner)
+    rendered = session.render_aggregate("combined")
+    assert rendered is not None
+    assert len(rendered.overrides) == 1
+    warning = rendered.overrides[0]
+    assert "(target host-a)" in warning
+    assert "(target host-b)" in warning
+
+
+def test_aggregate_provenance_carries_target(tmp_path: Path, stub_runner) -> None:
+    """Provenance entries produced during aggregate rendering carry the
+    contributing target's name; per-target rendering leaves it `None`
+    (redundant there)."""
+    inventory_path = tmp_path / "targets.yaml"
+    inventory_path.write_text(
+        """
+version: 1
+targets:
+  t1:
+    outputs:
+      combined:
+        fragments: [mark]
+    variables: {}
+"""
+    )
+    frag_dir = tmp_path / "frags"
+    _write_fragment(
+        frag_dir,
+        "mark",
+        """
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+    )
+    cfg = _aggregate_config(agg_path=tmp_path / "out.yaml")
+    session = render_mod.RenderSession(cfg, inventory_path, frag_dir, runner=stub_runner)
+    rendered = session.render_aggregate("combined")
+    assert rendered is not None
+    entry = rendered.provenance["/value"][-1]
+    assert entry.target == "t1"
+
+    # Per-target rendering of the same fragment (via a target-scoped output)
+    # leaves `target` unset — it would be redundant with only one target.
+    per_target_outputs = dict(cfg.outputs)
+    per_target_outputs["solo"] = OutputSpec(path=str(tmp_path / "solo-{target}"))
+    inventory_path.write_text(
+        """
+version: 1
+targets:
+  t1:
+    outputs:
+      solo:
+        fragments: [mark]
+    variables: {}
+"""
+    )
+    cfg2 = ProjectConfig(
+        version=1,
+        inventory="unused",
+        fragments_dir="unused",
+        outputs=per_target_outputs,
+        default_output="solo",
+    )
+    session2 = render_mod.RenderSession(cfg2, inventory_path, frag_dir, runner=stub_runner)
+    result = session2.render_target_outputs("t1")
+    solo_entry = result.outputs["solo"].provenance["/value"][-1]
+    assert solo_entry.target is None
+
+
+def test_captures_run_once_per_target_regardless_of_output_count(
+    tmp_path: Path, stub_runner
+) -> None:
+    """Regression guard for the RenderSession memoization: a target's capture
+    subprocess runs at most once per session, no matter how many outputs
+    (per-target or aggregate) consume the resulting variable."""
+    inventory_path = tmp_path / "targets.yaml"
+    inventory_path.write_text(
+        """
+version: 1
+targets:
+  t1:
+    outputs:
+      out-a:
+        fragments: [use-secret]
+      out-b:
+        fragments: [use-secret]
+      combined:
+        fragments: [use-secret]
+    variables:
+      secret_val:
+        from: capture
+        command: [echo, hi]
+"""
+    )
+    frag_dir = tmp_path / "frags"
+    _write_fragment(
+        frag_dir,
+        "use-secret",
+        """
+fragment:
+  version: 1
+  description: consumes the captured variable
+requires:
+  variables:
+    - secret_val
+operations:
+  - op: set
+    path: /value
+    value: "{{ secret_val }}"
+""",
+    )
+    cfg = ProjectConfig(
+        version=1,
+        inventory="unused",
+        fragments_dir="unused",
+        outputs={
+            "out-a": OutputSpec(path=str(tmp_path / "a-{target}")),
+            "out-b": OutputSpec(path=str(tmp_path / "b-{target}")),
+            "combined": OutputSpec(path=str(tmp_path / "combined.yaml"), scope="aggregate"),
+        },
+        default_output=None,
+    )
+    session = render_mod.RenderSession(cfg, inventory_path, frag_dir, runner=stub_runner)
+
+    result = session.render_target_outputs("t1")
+    assert set(result.outputs) == {"out-a", "out-b"}
+    session.render_aggregate("combined")
+
+    assert len(stub_runner.calls) == 1
+
+
+def test_aggregate_snapshot_matches_expected(
+    config_path: Path,
+    inventory_path: Path,
+    fragments_dir: Path,
+    secrets_example_path: Path,
+    fixtures_dir: Path,
+    stub_runner,
+) -> None:
+    """The example project's `ansible-inventory` aggregate output matches the
+    committed snapshot, byte for byte."""
+    cfg = config_mod.load_config(config_path)
+    session = render_mod.RenderSession(
+        cfg,
+        inventory_path,
+        fragments_dir,
+        secrets_path=secrets_example_path,
+        runner=stub_runner,
+    )
+    rendered = session.render_aggregate("ansible-inventory")
+    assert rendered is not None
+    text = render_mod.compose_output(rendered, cfg.outputs["ansible-inventory"])
+    expected = (fixtures_dir / "expected" / "ansible-inventory.yaml").read_bytes()
+    assert text.encode("utf-8") == expected
+
+
+def test_render_target_outputs_skips_aggregate_scope(
+    config_path: Path,
+    inventory_path: Path,
+    fragments_dir: Path,
+    secrets_example_path: Path,
+    stub_runner,
+) -> None:
+    """Per-target rendering never produces an aggregate-scoped output, even
+    though gb10-01 contributes fragments to `ansible-inventory` (via
+    `defaults`) — see README.md "Aggregate outputs"."""
+    cfg = config_mod.load_config(config_path)
+    session = render_mod.RenderSession(
+        cfg,
+        inventory_path,
+        fragments_dir,
+        secrets_path=secrets_example_path,
+        runner=stub_runner,
+    )
+    result = session.render_target_outputs("gb10-01")
+    assert "ansible-inventory" not in result.outputs
+    assert set(result.outputs) == {"user-data", "meta-data"}

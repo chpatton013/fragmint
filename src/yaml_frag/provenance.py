@@ -18,11 +18,22 @@ from __future__ import annotations
 from .models import ProvenanceEntry
 
 
+def _describe(entry: ProvenanceEntry) -> str:
+    """Render an entry's fragment for an override warning, appending a
+    ``(target NAME)`` parenthetical when the entry carries one (aggregate
+    scope only — see README.md "Aggregate outputs"). This is what turns an
+    aggregate override warning into a genuinely actionable duplicate-target
+    report: which two targets wrote the same path."""
+    if entry.target is not None:
+        return f"{entry.fragment} (target {entry.target})"
+    return entry.fragment
+
+
 class ProvenanceTracker:
     """Accumulates provenance and override information during a render.
 
-    Implementation notes:
-    - Keep an ordered map ``path -> list[ProvenanceEntry]`` (most recent last).
+    - ``entries`` is an ordered map ``path -> list[ProvenanceEntry]`` (most
+      recent last).
     - ``record`` is called by :mod:`merge` after each path mutation.
     - ``overrides`` collects human-readable warning strings for ``set``
       operations (and ``merge`` scalar replacements) that replaced an
@@ -56,8 +67,8 @@ class ProvenanceTracker:
             self.overrides.append(
                 f"warning: {entry.fragment} operation {entry.operation_index} "
                 f"replaced {path}\n"
-                f"  previous source: {previous.fragment}\n"
-                f"  new source: {entry.fragment}"
+                f"  previous source: {_describe(previous)}\n"
+                f"  new source: {_describe(entry)}"
             )
         history.append(entry)
 

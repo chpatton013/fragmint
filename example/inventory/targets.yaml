@@ -29,11 +29,21 @@ defaults:
     meta-data:
       fragments:
         - meta/instance-id
+    # `scope: aggregate` in yaml-frag.yaml: one Ansible inventory composed
+    # across every target, not one per target. Declared in `defaults` so
+    # every target opts in at once (README.md "Aggregate outputs": routing
+    # into an aggregate output uses the same per-output `fragments` opt-in
+    # mechanism as any other output — a target contributing nothing is its
+    # opt-out).
+    ansible-inventory:
+      fragments:
+        - ansible/host
 
 groups:
   gb10:
     variables:
       hardware_model: gb10
+      ansible_group: gb10
     outputs:
       user-data:
         fragments:
@@ -42,6 +52,7 @@ groups:
   generic_vm:
     variables:
       hardware_model: generic-vm
+      ansible_group: generic_vm
     outputs:
       user-data:
         fragments:
@@ -89,6 +100,9 @@ targets:
         command: [openssl, passwd, -6, -stdin]
         stdin: { from: secret, name: gb10-01_password }
       primary_interface: enP7s7
+      # Consumed only by ansible/host, for the aggregate ansible-inventory
+      # output (README.md "Aggregate outputs").
+      ansible_host: "10.0.0.11"
 
   gb10-02:
     groups:
@@ -106,6 +120,7 @@ targets:
         command: [openssl, passwd, -6, -stdin]
         stdin: { from: secret, name: gb10-02_password }
       primary_interface: enP7s7
+      ansible_host: "10.0.0.12"
 
   generic-vm-01:
     groups:
@@ -123,3 +138,4 @@ targets:
         command: [openssl, passwd, -6, -stdin]
         stdin: { from: secret, name: generic-vm-01_password }
       primary_interface: enp1s0
+      ansible_host: "10.0.0.21"

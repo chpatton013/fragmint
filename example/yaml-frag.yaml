@@ -4,9 +4,10 @@
 # Everything domain-specific lives here (and in fragments), never in the
 # renderer: the #cloud-config header comes from the output template, and the
 # optional Subiquity check is a named validator. This project renders two
-# named outputs per target — `user-data` and `meta-data` — which fragments
-# feed which output is declared per-output in the inventory (README.md
-# "Fragment order").
+# named outputs per target — `user-data` and `meta-data` — plus one
+# `scope: aggregate` output, `ansible-inventory`, composed once across every
+# target (README.md "Aggregate outputs"). Which fragments feed which output
+# is declared per-output in the inventory (README.md "Fragment order").
 version: 1
 
 inventory: inventory/targets.yaml
@@ -30,6 +31,21 @@ outputs:
 
   meta-data:
     path: "rendered/{target}/meta-data"
+
+  ansible-inventory:
+    # One file for the whole run, not one per target — see README.md
+    # "Aggregate outputs". `path` must NOT contain "{target}" for an
+    # aggregate output (config error otherwise), and an aggregate output can
+    # never be `default: true`.
+    scope: aggregate
+    path: "rendered/inventory.yaml"
+    # Whole-document validation for the composed inventory. Aggregate scope
+    # cannot use the trailing-assertion-fragment idiom `autoinstall/checks`
+    # relies on (an `assert` inside an aggregate fragment only ever sees the
+    # partial document built so far — README.md "Aggregate outputs") — this
+    # is how a project recovers whole-document checks for an aggregate
+    # output instead.
+    schema: schemas/ansible-inventory.schema.json
 
 # Named external validators, selected with --validator NAME.
 validators:

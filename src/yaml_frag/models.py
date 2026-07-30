@@ -15,7 +15,7 @@ these aliases in one place so every module agrees on the shapes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Union
+from typing import Literal, Union
 
 #: A node in a parsed YAML/JSON document.
 YamlValue = Union[
@@ -188,11 +188,17 @@ class ProvenanceEntry:
 
     See README.md "Provenance and `explain`". ``operation`` is the ``op`` string;
     ``operation_index`` is the zero-based index within the fragment.
+    ``target`` is ``None`` for per-target rendering (where it would be
+    redundant — there's only one target in play) and set to the contributing
+    target's name for aggregate-scoped rendering, where the same fragment is
+    applied once per target and "fragment X operation 0" alone does not
+    identify a single write (README.md "Aggregate outputs").
     """
 
     fragment: str
     operation_index: int
     operation: str
+    target: str | None = None
 
 
 @dataclass(frozen=True)
@@ -223,14 +229,21 @@ class OutputSpec:
     A project declares one or more named outputs (e.g. ``user-data``,
     ``meta-data``); each is entirely independent — its own path, template,
     schema, and validators. ``path`` is a destination pattern containing
-    ``{target}``. ``template`` is an optional text-template file into which the
+    ``{target}`` for ``scope: target`` outputs (the default); an aggregate
+    output's ``path`` is a single fixed path and must NOT contain
+    ``{target}`` (enforced in :mod:`config`, a config error otherwise).
+    ``template`` is an optional text-template file into which the
     serialized YAML is injected (replacing the literal token ``{{ document
     }}``); when ``None`` the serialized YAML is written verbatim. ``schema`` is
     an optional JSON schema the rendered document is validated against.
     ``validators`` names the validators run by default for this output.
     ``default`` marks the output implied by commands like ``--stdout`` when a
     target produces more than one output and no ``--only`` is given (see
-    README.md "CLI usage").
+    README.md "CLI usage"); an aggregate output may never be ``default: true``
+    (also enforced in :mod:`config`) since ``default`` exists solely to
+    disambiguate per-target commands. ``scope`` is ``"target"`` (one document
+    per target — today's behavior) or ``"aggregate"`` (one document composed
+    across every contributing target; see README.md "Aggregate outputs").
     """
 
     path: str = "rendered/{target}"
@@ -238,6 +251,7 @@ class OutputSpec:
     schema: str | None = None
     validators: tuple[str, ...] = ()
     default: bool = False
+    scope: Literal["target", "aggregate"] = "target"
 
 
 @dataclass(frozen=True)

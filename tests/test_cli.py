@@ -602,3 +602,369 @@ def test_list_targets_groups_fragments(repo_root: Path, capsys: pytest.CaptureFi
     out = capsys.readouterr().out
     assert "hardware/gb10" in out
     assert "autoinstall/checks" in out
+
+
+# --- Aggregate outputs (README.md "Aggregate outputs") ----------------------
+
+
+def test_list_outputs_shows_scope(repo_root: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """`list outputs` prints each output's name and scope."""
+    exit_code = main(["list", "outputs", "--config", str(repo_root / "example" / "yaml-frag.yaml")])
+    assert exit_code == ExitCode.SUCCESS
+    out = capsys.readouterr().out
+    assert "user-data\ttarget" in out
+    assert "meta-data\ttarget" in out
+    assert "ansible-inventory\taggregate" in out
+
+
+def test_render_target_silently_skips_aggregate_output(
+    repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`render TARGET` with no --only skips the aggregate output — no note
+    on stderr, since that would fire on every single-host render."""
+    exit_code = main(
+        [
+            "render",
+            "gb10-01",
+            "--config",
+            str(repo_root / "example" / "yaml-frag.yaml"),
+            "--secrets",
+            str(repo_root / "example" / "inventory" / "secrets.example.yaml"),
+            "--dry-run",
+        ]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    captured = capsys.readouterr()
+    assert "ansible-inventory" not in captured.err
+    assert "ansible-inventory" not in captured.out
+
+
+def test_render_target_only_aggregate_output_is_config_error(repo_root: Path) -> None:
+    """`render TARGET --only <aggregate>` is a config error pointing at
+    `render-all --only NAME` instead."""
+    exit_code = main(
+        [
+            "render",
+            "gb10-01",
+            "--config",
+            str(repo_root / "example" / "yaml-frag.yaml"),
+            "--secrets",
+            str(repo_root / "example" / "inventory" / "secrets.example.yaml"),
+            "--only",
+            "ansible-inventory",
+            "--stdout",
+        ]
+    )
+    assert exit_code == ExitCode.CONFIG_ERROR
+
+
+def test_validate_target_only_aggregate_output_is_config_error(repo_root: Path) -> None:
+    """`validate TARGET --only <aggregate>` mirrors `render`'s error."""
+    exit_code = main(
+        [
+            "validate",
+            "gb10-01",
+            "--config",
+            str(repo_root / "example" / "yaml-frag.yaml"),
+            "--secrets",
+            str(repo_root / "example" / "inventory" / "secrets.example.yaml"),
+            "--only",
+            "ansible-inventory",
+        ]
+    )
+    assert exit_code == ExitCode.CONFIG_ERROR
+
+
+def test_render_all_writes_both_per_target_and_aggregate_outputs(
+    tmp_path: Path, repo_root: Path
+) -> None:
+    """`render-all` (no --only) writes every per-target output for every
+    target, then the aggregate output once."""
+    exit_code = main(
+        [
+            "render-all",
+            "--config",
+            str(repo_root / "example" / "yaml-frag.yaml"),
+            "--secrets",
+            str(repo_root / "example" / "inventory" / "secrets.example.yaml"),
+        ]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    rendered_dir = repo_root / "example" / "rendered"
+    try:
+        assert (rendered_dir / "gb10-01" / "user-data").is_file()
+        assert (rendered_dir / "gb10-02" / "meta-data").is_file()
+        inventory_text = (rendered_dir / "inventory.yaml").read_text()
+        assert "gb10-01" in inventory_text
+        assert "gb10-02" in inventory_text
+        assert "generic-vm-01" in inventory_text
+    finally:
+        import shutil
+
+        for name in ("gb10-01", "gb10-02", "generic-vm-01"):
+            shutil.rmtree(rendered_dir / name, ignore_errors=True)
+        (rendered_dir / "inventory.yaml").unlink(missing_ok=True)
+
+
+def test_render_all_only_scopes_to_single_aggregate_output(
+    tmp_path: Path, repo_root: Path
+) -> None:
+    """`render-all --only <aggregate>` renders no per-target output at all —
+    just the one aggregate output."""
+    out_path = tmp_path / "inventory.yaml"
+    exit_code = main(
+        [
+            "render-all",
+            "--config",
+            str(repo_root / "example" / "yaml-frag.yaml"),
+            "--secrets",
+            str(repo_root / "example" / "inventory" / "secrets.example.yaml"),
+            "--only",
+            "ansible-inventory",
+            "--output",
+            str(out_path),
+        ]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    assert out_path.is_file()
+    text = out_path.read_text()
+    assert "gb10-01" in text
+    assert "generic-vm-01" in text
+    # No per-target directories were created alongside it.
+    rendered_dir = repo_root / "example" / "rendered"
+    assert not (rendered_dir / "gb10-01").exists()
+
+
+def test_render_all_only_scopes_to_single_target_output(
+    tmp_path: Path, repo_root: Path
+) -> None:
+    """`render-all --only NAME` with a `scope: target` output writes just
+    that output for every target, and no aggregate output runs."""
+    exit_code = main(
+        [
+            "render-all",
+            "--config",
+            str(repo_root / "example" / "yaml-frag.yaml"),
+            "--secrets",
+            str(repo_root / "example" / "inventory" / "secrets.example.yaml"),
+            "--only",
+            "meta-data",
+        ]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    rendered_dir = repo_root / "example" / "rendered"
+    try:
+        assert (rendered_dir / "gb10-01" / "meta-data").is_file()
+        assert not (rendered_dir / "gb10-01" / "user-data").exists()
+        assert not (rendered_dir / "inventory.yaml").exists()
+    finally:
+        import shutil
+
+        for name in ("gb10-01", "gb10-02", "generic-vm-01"):
+            shutil.rmtree(rendered_dir / name, ignore_errors=True)
+
+
+def test_render_all_skips_aggregate_output_when_a_target_fails(tmp_path: Path) -> None:
+    """If any target fails, `render-all` skips aggregate outputs entirely
+    (no partial aggregate file) and reports why on stderr."""
+    fragments_dir = tmp_path / "fragments"
+    fragments_dir.mkdir()
+    (fragments_dir / "ok.yaml").write_text(
+        """
+fragment:
+  version: 1
+  description: fine
+operations:
+  - op: set
+    path: "/hosts/{{ target }}"
+    value: true
+"""
+    )
+    inventory_path = tmp_path / "targets.yaml"
+    inventory_path.write_text(
+        """
+version: 1
+targets:
+  good:
+    outputs:
+      combined:
+        fragments: [ok]
+    variables: {}
+  bad:
+    outputs:
+      combined:
+        fragments: [does-not-exist]
+    variables: {}
+"""
+    )
+    config_path = tmp_path / "yaml-frag.yaml"
+    config_path.write_text(
+        f"""
+version: 1
+inventory: {inventory_path}
+fragments_dir: {fragments_dir}
+outputs:
+  combined:
+    scope: aggregate
+    path: "{tmp_path}/rendered/combined.yaml"
+"""
+    )
+    exit_code = main(["render-all", "--config", str(config_path)])
+    assert exit_code != ExitCode.SUCCESS
+    assert not (tmp_path / "rendered" / "combined.yaml").exists()
+
+
+def test_explain_no_target_requires_aggregate_only(repo_root: Path) -> None:
+    """`explain` with no TARGET and no (or non-aggregate) --only is a config
+    error."""
+    exit_code = main(["explain", "--config", str(repo_root / "example" / "yaml-frag.yaml")])
+    assert exit_code == ExitCode.CONFIG_ERROR
+
+    exit_code = main(
+        [
+            "explain",
+            "--config",
+            str(repo_root / "example" / "yaml-frag.yaml"),
+            "--only",
+            "user-data",
+        ]
+    )
+    assert exit_code == ExitCode.CONFIG_ERROR
+
+
+def test_explain_no_target_with_aggregate_only_shows_provenance(
+    repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`explain --only <aggregate>` with no TARGET shows the composed
+    aggregate document's provenance, with each entry naming its
+    contributing target."""
+    exit_code = main(
+        [
+            "explain",
+            "--config",
+            str(repo_root / "example" / "yaml-frag.yaml"),
+            "--secrets",
+            str(repo_root / "example" / "inventory" / "secrets.example.yaml"),
+            "--only",
+            "ansible-inventory",
+        ]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    out = capsys.readouterr().out
+    assert "== ansible-inventory ==" in out
+    assert "(target gb10-01)" in out
+    assert "(target generic-vm-01)" in out
+
+
+def test_explain_target_with_aggregate_only_is_config_error(repo_root: Path) -> None:
+    """Naming TARGET together with an aggregate --only is the same config
+    error as `render TARGET --only <aggregate>`."""
+    exit_code = main(
+        [
+            "explain",
+            "gb10-01",
+            "--config",
+            str(repo_root / "example" / "yaml-frag.yaml"),
+            "--secrets",
+            str(repo_root / "example" / "inventory" / "secrets.example.yaml"),
+            "--only",
+            "ansible-inventory",
+        ]
+    )
+    assert exit_code == ExitCode.CONFIG_ERROR
+
+
+def _aggregate_only_project(tmp_path: Path) -> Path:
+    """Write a minimal project whose sole target routes fragments ONLY into an
+    aggregate output, so the target produces no per-target output at all."""
+    (tmp_path / "fragments").mkdir()
+    (tmp_path / "fragments" / "host.yaml").write_text(
+        """
+fragment:
+  version: 1
+  description: register the target in the aggregate document
+operations:
+  - op: set
+    path: "/hosts/{{ target }}"
+    value: true
+"""
+    )
+    (tmp_path / "inventory.yaml").write_text(
+        """
+version: 1
+defaults:
+  outputs:
+    agg:
+      fragments: [host]
+targets:
+  only-aggregate: {}
+"""
+    )
+    config_path = tmp_path / "yaml-frag.yaml"
+    config_path.write_text(
+        f"""
+version: 1
+inventory: inventory.yaml
+fragments_dir: fragments
+outputs:
+  agg:
+    scope: aggregate
+    path: "{tmp_path / 'out.yaml'}"
+"""
+    )
+    return config_path
+
+
+def test_render_target_producing_only_aggregate_outputs_writes_nothing(
+    tmp_path: Path,
+) -> None:
+    """`render TARGET` silently skips aggregate outputs, so a target routing
+    fragments only into one produces nothing and still succeeds."""
+    config_path = _aggregate_only_project(tmp_path)
+
+    exit_code = main(["render", "only-aggregate", "--config", str(config_path)])
+
+    assert exit_code == ExitCode.SUCCESS
+    assert not (tmp_path / "out.yaml").exists()
+
+
+def test_stdout_on_target_with_no_per_target_outputs_explains_why(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--stdout` on a target that produces no PER-TARGET output must say so,
+    not report that it "produces multiple outputs ()" — the empty case is
+    reachable precisely because aggregate outputs are excluded from
+    per-target rendering (README.md "Aggregate outputs")."""
+    config_path = _aggregate_only_project(tmp_path)
+
+    exit_code = main(
+        ["render", "only-aggregate", "--config", str(config_path), "--stdout"]
+    )
+
+    assert exit_code == ExitCode.CONFIG_ERROR
+    message = capsys.readouterr().err
+    assert "produces no per-target outputs" in message
+    assert "render-all" in message
+    assert "multiple outputs ()" not in message
+
+
+def test_aggregate_only_error_hints_name_the_relevant_command(
+    repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Each single-target command's aggregate `--only` error suggests its own
+    remedy rather than a one-size-fits-all `render-all` hint."""
+    common = [
+        "--config",
+        str(repo_root / "example" / "yaml-frag.yaml"),
+        "--only",
+        "ansible-inventory",
+    ]
+
+    assert main(["render", "gb10-01", *common]) == ExitCode.CONFIG_ERROR
+    assert "render-all --only ansible-inventory" in capsys.readouterr().err
+
+    assert main(["validate", "gb10-01", *common]) == ExitCode.CONFIG_ERROR
+    assert "validate-all --only ansible-inventory" in capsys.readouterr().err
+
+    assert main(["explain", "gb10-01", *common]) == ExitCode.CONFIG_ERROR
+    assert "without a TARGET" in capsys.readouterr().err

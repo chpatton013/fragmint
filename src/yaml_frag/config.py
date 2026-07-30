@@ -25,7 +25,7 @@ See README.md "Project configuration". Validate against
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import jsonschema
 
@@ -70,6 +70,34 @@ def _parse_output(config_path: Path, config_dir: Path, name: str, output_raw: An
         raise ConfigError(
             f"project configuration {config_path}: `outputs.{name}.path` is required"
         )
+
+    scope_raw = output_raw.get("scope", "target")
+    if scope_raw not in ("target", "aggregate"):
+        raise ConfigError(
+            f"project configuration {config_path}: `outputs.{name}.scope` must be "
+            f"'target' or 'aggregate', got {scope_raw!r}"
+        )
+    scope = cast(Literal["target", "aggregate"], scope_raw)
+    default_flag = bool(output_raw.get("default", False))
+
+    # Cross-cutting aggregate-scope rules (README.md "Aggregate outputs"),
+    # enforced here rather than in the schema per the existing convention for
+    # cross-cutting config rules.
+    if scope == "aggregate":
+        if "{target}" in output_path:
+            raise ConfigError(
+                f"project configuration {config_path}: `outputs.{name}` has "
+                f"`scope: aggregate` but its `path` contains `{{target}}`; an "
+                f"aggregate output is not per-target, so `{{target}}` there is a "
+                f"mistake, not a wildcard"
+            )
+        if default_flag:
+            raise ConfigError(
+                f"project configuration {config_path}: `outputs.{name}` has "
+                f"`scope: aggregate` and cannot also be marked `default: true` "
+                f"(`default` exists solely to disambiguate per-target commands)"
+            )
+
     output_template = output_raw.get("template")
     output_schema = output_raw.get("schema")
     return OutputSpec(
@@ -77,7 +105,8 @@ def _parse_output(config_path: Path, config_dir: Path, name: str, output_raw: An
         template=_resolve_relative(config_dir, output_template) if output_template else None,
         schema=_resolve_relative(config_dir, output_schema) if output_schema else None,
         validators=tuple(output_raw.get("validators", [])),
-        default=bool(output_raw.get("default", False)),
+        default=default_flag,
+        scope=scope,
     )
 
 
@@ -189,6 +218,26 @@ def resolve_output_path(output: OutputSpec, target: str, override: Path | None =
     return Path(output.path.format(target=target))
 
 
+def resolve_aggregate_output_path(output: OutputSpec, override: Path | None = None) -> Path:
+    """Compute the destination path for an aggregate-scoped output.
+
+    There is no per-target substitution here — an aggregate output has a
+    single fixed path for the whole run (README.md "Aggregate outputs").
+    ``override`` is used verbatim when given. Kept as a distinct function from
+    :func:`resolve_output_path` (rather than a shared one with an optional
+    target) so the type of path computation being performed is explicit at
+    every call site. Raises :class:`~yaml_frag.errors.ConfigError` if
+    ``output.scope`` is not ``"aggregate"``.
+    """
+    if output.scope != "aggregate":
+        raise ConfigError(
+            f"resolve_aggregate_output_path called on a `scope: {output.scope}` output"
+        )
+    if override is not None:
+        return override
+    return Path(output.path)
+
+
 def select_validators(
     config: ProjectConfig,
     output: OutputSpec,
@@ -213,6 +262,7 @@ __all__ = [
     "DEFAULT_CONFIG_PATH",
     "SUPPORTED_CONFIG_VERSION",
     "load_config",
+    "resolve_aggregate_output_path",
     "resolve_output_path",
     "select_validators",
 ]

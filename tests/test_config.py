@@ -6,7 +6,12 @@ from pathlib import Path
 
 import pytest
 
-from yaml_frag.config import load_config, resolve_output_path, select_validators
+from yaml_frag.config import (
+    load_config,
+    resolve_aggregate_output_path,
+    resolve_output_path,
+    select_validators,
+)
 from yaml_frag.errors import ConfigError
 from yaml_frag.models import OutputSpec, ProjectConfig, ValidatorSpec
 
@@ -224,6 +229,114 @@ def test_invalid_config_raises_config_error(tmp_path: Path) -> None:
     no_outputs = _write(tmp_path / "empty-outputs.yaml", "version: 1\noutputs: {}\n")
     with pytest.raises(ConfigError):
         load_config(no_outputs)
+
+
+# --- Aggregate scope (README.md "Aggregate outputs") ------------------
+
+
+def test_scope_defaults_to_target(tmp_path: Path) -> None:
+    """An output with no `scope` field is `scope: target`, fully backward
+    compatible with configs written before aggregate outputs existed."""
+    config_path = _write(
+        tmp_path / "yaml-frag.yaml",
+        "version: 1\noutputs:\n  main:\n    path: rendered/{target}\n",
+    )
+    config = load_config(config_path)
+    assert config.outputs["main"].scope == "target"
+
+
+def test_scope_aggregate_parsed(tmp_path: Path) -> None:
+    """`scope: aggregate` is parsed through onto the OutputSpec."""
+    config_path = _write(
+        tmp_path / "yaml-frag.yaml",
+        "version: 1\n"
+        "outputs:\n"
+        "  ansible-inventory:\n"
+        "    scope: aggregate\n"
+        "    path: rendered/inventory.yaml\n",
+    )
+    config = load_config(config_path)
+    assert config.outputs["ansible-inventory"].scope == "aggregate"
+
+
+def test_scope_invalid_value_rejected(tmp_path: Path) -> None:
+    """An unrecognized `scope` value is a config error."""
+    config_path = _write(
+        tmp_path / "yaml-frag.yaml",
+        "version: 1\n"
+        "outputs:\n"
+        "  main:\n"
+        "    scope: nonsense\n"
+        "    path: rendered/{target}\n",
+    )
+    with pytest.raises(ConfigError):
+        load_config(config_path)
+
+
+def test_aggregate_output_rejects_target_placeholder_in_path(tmp_path: Path) -> None:
+    """`scope: aggregate` + `{target}` in `path` is a config error: an
+    aggregate output is a single fixed file, not per-target."""
+    config_path = _write(
+        tmp_path / "yaml-frag.yaml",
+        "version: 1\n"
+        "outputs:\n"
+        "  ansible-inventory:\n"
+        "    scope: aggregate\n"
+        "    path: rendered/{target}/inventory.yaml\n",
+    )
+    with pytest.raises(ConfigError):
+        load_config(config_path)
+
+
+def test_aggregate_output_rejects_default_true(tmp_path: Path) -> None:
+    """`scope: aggregate` + `default: true` is a config error: `default`
+    exists solely to disambiguate per-target commands."""
+    config_path = _write(
+        tmp_path / "yaml-frag.yaml",
+        "version: 1\n"
+        "outputs:\n"
+        "  ansible-inventory:\n"
+        "    scope: aggregate\n"
+        "    path: rendered/inventory.yaml\n"
+        "    default: true\n",
+    )
+    with pytest.raises(ConfigError):
+        load_config(config_path)
+
+
+def test_target_scope_allows_default_and_target_placeholder(tmp_path: Path) -> None:
+    """The aggregate-scope restrictions don't apply to `scope: target`
+    outputs: `{target}` in the path and `default: true` are both valid."""
+    config_path = _write(
+        tmp_path / "yaml-frag.yaml",
+        "version: 1\n"
+        "outputs:\n"
+        "  user-data:\n"
+        "    path: rendered/{target}/user-data\n"
+        "    default: true\n",
+    )
+    config = load_config(config_path)
+    assert config.outputs["user-data"].scope == "target"
+    assert config.outputs["user-data"].default is True
+
+
+def test_resolve_aggregate_output_path_uses_fixed_path() -> None:
+    """An aggregate output's path has no per-target substitution."""
+    output = OutputSpec(path="rendered/inventory.yaml", scope="aggregate")
+    assert resolve_aggregate_output_path(output) == Path("rendered/inventory.yaml")
+
+
+def test_resolve_aggregate_output_path_override() -> None:
+    output = OutputSpec(path="rendered/inventory.yaml", scope="aggregate")
+    assert resolve_aggregate_output_path(output, override=Path("/tmp/out")) == Path("/tmp/out")
+
+
+def test_resolve_aggregate_output_path_rejects_target_scope() -> None:
+    """Calling the aggregate path resolver on a `scope: target` output is a
+    programming error, not a user-facing one, but should still fail closed."""
+    output = OutputSpec(path="rendered/{target}", scope="target")
+    with pytest.raises(ConfigError):
+        resolve_aggregate_output_path(output)
 
 
 def test_real_project_config_loads(config_path: Path, example_root: Path) -> None:

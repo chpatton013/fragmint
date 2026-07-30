@@ -209,3 +209,32 @@ def test_real_inventory_missing_target(inventory_path: Path) -> None:
     inventory = load_inventory(inventory_path)
     with pytest.raises(UnknownTargetError):
         resolve_target(inventory, "no-such-target")
+
+
+@pytest.mark.parametrize("bad_name", ["gb10/01", "gb10~01", "a/b~c"])
+def test_pointer_hostile_target_name_rejected(tmp_path: Path, bad_name: str) -> None:
+    """A target name containing `/` or `~` would corrupt a JSON Pointer once
+    substituted into a templated operation path (e.g. via `{{ target }}` in
+    an aggregate output's fragment), so it's rejected at inventory load."""
+    inventory_file = tmp_path / "targets.yaml"
+    inventory_file.write_text(
+        "version: 1\n"
+        "targets:\n"
+        f"  {bad_name!r}:\n"
+        "    variables: {}\n"
+    )
+    with pytest.raises(InventoryError):
+        load_inventory(inventory_file)
+
+
+def test_pointer_safe_target_name_accepted(tmp_path: Path) -> None:
+    """A target name without `/` or `~` loads normally."""
+    inventory_file = tmp_path / "targets.yaml"
+    inventory_file.write_text(
+        "version: 1\n"
+        "targets:\n"
+        "  gb10-01:\n"
+        "    variables: {}\n"
+    )
+    inventory = load_inventory(inventory_file)
+    assert "gb10-01" in inventory.targets

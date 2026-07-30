@@ -78,17 +78,20 @@ directory*, not the caller's working directory (see "Project configuration"
 below) — that's what makes the project directory portable and relocatable.
 
 This repository ships one such project, the Ubuntu autoinstall example, under
-`example/`. It declares two named outputs — `user-data` and `meta-data` — to
-demonstrate multi-file output (see "Project configuration" and "Fragment
-order" below):
+`example/`. It declares three named outputs — `user-data`, `meta-data`, and
+the aggregate `ansible-inventory` — to demonstrate multi-file output and
+both output scopes (see "Project configuration", "Fragment order", and
+"Aggregate outputs" below):
 
 ```
 example/
 ├── yaml-frag.yaml   Project configuration (input locations, named outputs, validators).
 ├── inventory/       Target/group/default definitions (targets.yaml) + secrets.example.yaml.
 ├── fragments/       Reusable, composable fragments under any nested layout.
+├── schemas/         Project-supplied document schemas (e.g. the aggregate inventory's).
 ├── templates/       Output templates (e.g. the #cloud-config wrapper).
-└── rendered/        Output, per target per output's configured path pattern (git-ignored).
+└── rendered/        Output: per-target files under a per-target dir, plus the aggregate
+                      inventory.yaml at the top level (git-ignored).
 ```
 
 `fragments/` in particular is entirely up to the project: fragments may live
@@ -144,8 +147,8 @@ operation — but never the value of a secret or a secret-sourced argument.
 `yaml-frag.yaml` (default name, overridable with `--config`) adapts the
 generic renderer to a use case. It declares default input locations, one or
 more **named outputs** — each with its own path pattern + optional text
-template + optional document schema + default validators — and named
-validators:
+template + optional document schema + default validators + a **scope** — and
+named validators:
 
 ```yaml
 version: 1
@@ -177,6 +180,14 @@ outputs:
 
   meta-data:
     path: "rendered/{target}/meta-data"
+
+  ansible-inventory:
+    # "target" (the default, omittable) or "aggregate" — see "Aggregate
+    # outputs" below. An aggregate output's `path` is a single fixed path for
+    # the whole run and must NOT contain "{target}" (config error otherwise),
+    # and it can never be `default: true`.
+    scope: aggregate
+    path: "rendered/inventory.yaml"
 
 # Named validators, selected with --validator NAME. Each runs an external
 # command against the rendered output file; a nonzero exit is a failure.
@@ -270,7 +281,10 @@ targets:
 A **target** is any named thing you want to render a document for (a machine,
 an environment, a service — the renderer does not care). Groups are an
 optional, generic reuse mechanism: a named bundle of variables and per-output
-fragments a target can pull in.
+fragments a target can pull in. A target name must not contain `/` or `~` —
+rejected at inventory load — since it would corrupt a JSON Pointer once
+substituted into a templated operation path (see "Paths" and "Aggregate
+outputs").
 
 ### Fragment order
 
@@ -333,6 +347,138 @@ after every other layer (including CLI overrides), defining a variable named
 `target` or `output` anywhere (`defaults`, a group, the target itself, or
 `--var target=...`/`--var output=...`) is a fail-closed `InventoryError`
 rather than being silently discarded.
+
+## Aggregate outputs
+
+Every output described so far has `scope: target` (the default): one document
+per target. An output declared with `scope: aggregate` instead produces a
+**single document for the whole run**, composed from every target that
+contributes to it — useful for something like an Ansible inventory, which
+needs one file describing every host, not one file per host.
+
+```yaml
+# yaml-frag.yaml
+outputs:
+  ansible-inventory:
+    scope: aggregate
+    path: "rendered/inventory.yaml"   # a single fixed path — never {target}
+```
+
+```yaml
+# inventory/targets.yaml — routed exactly like any other output
+defaults:
+  outputs:
+    ansible-inventory:
+      fragments: [ansible/host]
+```
+
+```yaml
+# fragments/ansible/host.yaml — the target name lives in the PATH, not a value
+operations:
+  - op: merge
+    path: "/all/children/{{ ansible_group }}/hosts/{{ target }}"
+    value:
+      ansible_host: "{{ ansible_host }}"
+```
+
+This is the example project's real `ansible-inventory` output (see "Example
+project" below); rendering it produces one file describing every configured
+host:
+
+```yaml
+all:
+  children:
+    gb10:
+      hosts:
+        gb10-01: { ansible_host: 10.0.0.11 }
+        gb10-02: { ansible_host: 10.0.0.12 }
+    generic_vm:
+      hosts:
+        generic-vm-01: { ansible_host: 10.0.0.21 }
+```
+
+Aggregate scope reuses every other mechanism in this tool:
+
+- **Routing and opt-in work exactly like any other output.** A target
+  contributes to an aggregate output through the same
+  `outputs.<name>.fragments` at the `defaults`/group/target layers. A target
+  contributing no fragments for the aggregate output contributes nothing to
+  the document — that's its opt-out. If *no* target contributes, the output is
+  not produced at all (same rule as "Fragment order": an output nothing feeds
+  is never written). Putting a fragment in `defaults` opts every target in at
+  once; putting it in a group opts in that group's members.
+- **Ordering is two-level and purely positional**, applied across targets as
+  well as within one:
+  1. **Targets**, in inventory declaration order — never sorted, exactly like
+     every other targets-in-order rule in this tool.
+  2. **Fragments within a target**, in that target's resolved order for the
+     output (defaults -> groups -> target), exactly as for a per-target
+     output.
+
+  A later target's write can override an earlier target's contribution at the
+  same path, and the renderer never reorders — including never sorting hosts
+  in the output. If you want hosts alphabetized, order the inventory.
+- **Templated operation paths put the target where it belongs: in a
+  position, not a value.** `{{ target }}` (and any other variable) may appear
+  in an operation's `path`, not just its `value` — see "Paths" below. This is
+  what lets one fragment, applied once per contributing target, write each
+  target under a distinct key of the same shared document.
+- **Serialization, templating, and writing work identically.**
+  `compose_output`, `write_output`, and validators all operate on a
+  `RenderedOutput` plus an `OutputSpec` exactly as they do for a per-target
+  output — a `template:` on an aggregate output works exactly as it does
+  per-target (e.g. a header comment).
+- **Provenance and override warnings identify the contributing target.**
+  Because the same fragment applies once per contributing target,
+  "`ansible/host` operation 0" alone does not identify a single write. Every
+  provenance entry produced
+  during aggregate rendering carries the contributing target's name (`None`
+  for per-target rendering, where it would be redundant); `explain` shows it
+  as a parenthetical, and an override warning names both the previous and the
+  new target — which, for an aggregate document, is exactly the "two targets
+  claimed the same host key" bug you want reported:
+
+  ```text
+  [ansible-inventory] warning: ansible/host operation 0 replaced
+  /all/children/gb10/hosts/gb10-01/ansible_host
+    previous source: ansible/host (target gb10-01)
+    new source: ansible/host (target gb10-01-dup)
+  ```
+
+**The partial-document assertion caveat.** An `assert` operation inside a
+fragment contributing to an aggregate output runs during *that target's*
+turn in the loop, so it only ever sees the **partial** document built so far
+(through the current target) — never the finished, whole-run document. This
+is a real footgun: the `autoinstall/checks` idiom (a trailing fragment whose
+whole job is to assert the fully composed document is correct) does **not**
+work for an aggregate output, because there is no single target whose "last
+fragment" runs after every other target. Whole-document validation for an
+aggregate output must instead go through that output's `schema` or a named
+validator — both of which run on the *finished* document, after every
+contributing target has been applied (see "Validation"). The example
+project's `ansible-inventory` output demonstrates this: it sets `schema:
+schemas/ansible-inventory.schema.json` instead of relying on a checks
+fragment.
+
+**Config-time rules** (README.md "Project configuration"): an aggregate
+output's `path` must not contain `{target}` (it's a single fixed path, not a
+wildcard); an aggregate output can never be `default: true` (`default` exists
+solely to disambiguate per-target commands like `--stdout` on `render
+TARGET`, which an aggregate output is never the answer to). Both are config
+errors at load time.
+
+**CLI surface** (see "CLI usage" for the full command reference): `render
+TARGET` silently skips aggregate outputs (they're not a function of one
+target); `render TARGET --only <aggregate>` is a config error pointing at
+`render-all --only NAME` instead; `render-all`/`validate-all` render/validate
+every per-target output for every target and then every aggregate output
+once, *unless any target failed*, in which case aggregate outputs are skipped
+entirely — a partial aggregate document (missing whatever failed) is worse
+than none — and the skip is reported on stderr; `render-all --only NAME`
+scopes the whole run to one output, of either scope, which is the fast
+iteration loop for authoring an aggregate output; `explain` accepts an
+optional TARGET, which may be omitted only when `--only` names an aggregate
+output; `list outputs` prints each output's name and scope.
 
 ## Variable value sources
 
@@ -469,6 +615,15 @@ Operation paths are JSON Pointers:
 - Array indexes are not supported (intentionally — it discourages brittle
   fragments).
 - Escaping follows JSON Pointer rules: `~1` → `/`, `~0` → `~`.
+- A path may itself contain template expressions (see "Template rendering"
+  below), e.g. `/all/children/{{ ansible_group }}/hosts/{{ target }}` — this
+  is what "Aggregate outputs" needs to put a target's name in a *position*
+  rather than a value. The rendered result is validated as a JSON Pointer
+  before use: a template that produces a malformed pointer or a non-string
+  value fails closed, naming the fragment and operation index, before the
+  merge operation ever runs. Templated mapping *keys* are not supported —
+  path templating covers the same need, and keeping keys literal keeps
+  `explain` paths predictable.
 
 ### Merge operations
 
@@ -603,7 +758,10 @@ naming the target, fragment, operation index, and missing variable name (it
 never silently substitutes an empty string). Templates may appear in mapping
 values, list values, multiline strings, operation paths, and assertion
 values; they must not dynamically create new YAML structure by returning YAML
-text — rendering occurs on already-parsed scalar strings.
+text — rendering occurs on already-parsed scalar strings. A templated
+operation path is additionally validated as a JSON Pointer after rendering
+(see "Paths"), since a template could produce a malformed pointer or a
+non-string result.
 
 Variables remain typed when the entire scalar is a single template
 expression. For example, with `enable_package_upgrade: false`:
@@ -621,7 +779,16 @@ internals. Only a small set of safe filters is exposed: `default`, `lower`,
 
 ## Rendering algorithm
 
-For each requested target:
+A `RenderSession` (one per run — a single CLI invocation, or an aggregate
+output, which by construction visits every target) loads the project
+configuration and the inventory once, then memoizes each target's resolved
+variables and each loaded fragment for the life of the session — so a
+capture subprocess runs at most once per target regardless of how many
+outputs (per-target or aggregate) consume the result, and a fragment shared
+by many targets is read and schema-validated once, not once per target.
+
+**Per-target output** (`scope: target`, the default). For each requested
+target:
 
 1. Load the project configuration (its named `outputs`).
 2. Load and validate the inventory.
@@ -631,14 +798,16 @@ For each requested target:
    the project config's `outputs` (a config error otherwise).
 4. Resolve variable value sources (secrets/captures) once — shared across
    every output this target produces.
-5. For each output the target produces, independently:
+5. For each `scope: target` output the target produces, independently
+   (`scope: aggregate` outputs are skipped here — see "Aggregate outputs"):
    1. Load every referenced fragment and validate it against the fragment
       schema.
    2. Start with an empty document.
    3. For each fragment, in order: verify required variables; render
-      templates using the resolved variable map; apply operations in listed
-      order, recording provenance for every changed path; evaluate `assert`
-      operations as they're encountered.
+      templates (including the operation's `path` — see "Paths") using the
+      resolved variable map; apply operations in listed order, recording
+      provenance for every changed path; evaluate `assert` operations as
+      they're encountered.
    4. Run generic structural validation (unresolved-marker check; optional
       output-specific document schema).
    5. Serialize deterministic YAML.
@@ -654,16 +823,28 @@ that target — no empty file is written. The renderer creates exactly the
 output file(s) the project configures for a given target — it never forces
 companion files beyond what the inventory routes fragments to.
 
+**Aggregate output** (`scope: aggregate`) — a second, small composition loop
+over the *whole run* instead of one target; see "Aggregate outputs" above for
+the full algorithm, ordering rules, and the partial-document assertion
+caveat. Generic validation, serialization, output templating, writing, and
+validators are identical to the per-target case above — only how the
+document itself gets built differs.
+
 ## Provenance and `explain`
 
 The renderer tracks which fragment and operation last modified each path,
 independently per output. `explain` prints one `== <output name> ==` section
-per output the target produces (or just the one named by `--only`):
+per output the target produces (or just the one named by `--only`). `TARGET`
+is optional: it may be omitted only when `--only` names an `scope: aggregate`
+output, since an aggregate output isn't a function of one target; naming
+`TARGET` together with an aggregate `--only` is the same config error as
+`render TARGET --only <aggregate>` (see "Aggregate outputs"):
 
 ```bash
 yaml-frag explain gb10-01
 yaml-frag explain gb10-01 /autoinstall/storage
 yaml-frag explain gb10-01 --only meta-data
+yaml-frag explain --only ansible-inventory
 ```
 
 ```text
@@ -684,6 +865,22 @@ yaml-frag explain gb10-01 --only meta-data
   source: meta/instance-id operation 0
 ```
 
+For an aggregate output, every `source:`/`contributors:` line carries a
+`(target NAME)` parenthetical, since the same fragment applies once per
+contributing target and a fragment/operation-index pair alone does not
+identify a single write:
+
+```text
+== ansible-inventory ==
+
+/all/children/gb10/hosts/gb10-01/ansible_host
+  value: 10.0.0.11
+  source: ansible/host operation 0 (target gb10-01)
+```
+
+Per-target rendering never shows this parenthetical — there's only one
+target in play, so it would be redundant.
+
 ## Conflict reporting
 
 When a `set` (or a `merge`'s scalar replacement) replaces an existing value,
@@ -703,6 +900,18 @@ visible — prefer this when you know a fragment is meant to replace a
 specific earlier value, so an *unexpected* override elsewhere still
 surfaces. Either way the replacement itself still happens and is still
 visible via `explain`; only the warning is suppressed.
+
+For an aggregate output, the same warning also names the contributing
+targets, turning it into a duplicate-target detector — exactly the "two
+targets claimed the same host key" bug you want reported (see "Aggregate
+outputs"):
+
+```text
+[ansible-inventory] warning: ansible/host operation 0 replaced
+/all/children/gb10/hosts/gb10-01/ansible_host
+  previous source: ansible/host (target gb10-01)
+  new source: ansible/host (target gb10-01-dup)
+```
 
 A `merge` encountering an incompatible type fails instead:
 
@@ -738,7 +947,12 @@ built into the renderer; the last two are supplied by the project.
    `autoinstall/checks` fragment asserting the autoinstall structure, and
    per-hardware fragments assert their own additions (e.g.
    `network.version == 2`). Assertions run as part of rendering and fail
-   closed.
+   closed. **This does not work for `scope: aggregate` outputs**: an `assert`
+   inside an aggregate fragment only ever sees the partial document built so
+   far (through the current target), never the finished whole-run document —
+   see "Aggregate outputs". Use `schema` or a named validator for
+   whole-document checks on an aggregate output instead; the example
+   project's `ansible-inventory` output does exactly this.
 4. **Named validators (project supplied, external).** Projects declare named
    validators in the project config; select them with a repeatable
    `--validator NAME` (if none given, the output's default validators run).
@@ -767,32 +981,38 @@ serializer.
 ## CLI usage
 
 ```bash
-yaml-frag render gb10-01                 # -> every output the target produces
+yaml-frag render gb10-01                 # -> every per-target output the target produces
 yaml-frag render gb10-01 --only meta-data --stdout   # print one output only
 yaml-frag render gb10-01 --validator subiquity
-yaml-frag render-all                     # render every target, every output
+yaml-frag render-all                     # every target's outputs, then every aggregate output once
+yaml-frag render-all --only ansible-inventory --stdout   # just the one aggregate output
 yaml-frag validate gb10-01               # render in memory + validate every output
 yaml-frag validate-all
 yaml-frag explain gb10-01 [/path]        # where did each value come from? (all outputs, or --only)
+yaml-frag explain --only ansible-inventory   # TARGET omitted: only valid for an aggregate --only
 yaml-frag inspect gb10-01                # resolved groups/per-output fragments/vars (redacted)
-yaml-frag list targets|fragments|groups
+yaml-frag list targets|fragments|groups|outputs
 ```
 
 All of the above assume `--config example/yaml-frag.yaml` (or that you've `cd`'d
 into `example/` and use the default). Every command accepts `--config PATH`
 (default `yaml-frag.yaml`). Common
-options: `--inventory`, `--fragments-dir`, `--output` (render only),
-`--secrets`, `--var KEY=VALUE`, `--validator NAME`, `--only NAME`, `--dry-run`,
-`--quiet-overrides`, `--no-validate`. `render-all`/`validate-all`
+options: `--inventory`, `--fragments-dir`, `--output` (render/render-all
+only), `--secrets`, `--var KEY=VALUE`, `--validator NAME`, `--only NAME`,
+`--dry-run`, `--quiet-overrides`, `--no-validate`. `render-all`/`validate-all`
 process every target in inventory order and exit nonzero if any target
 fails, without leaving a partially written output file for a failed target
 (atomic temp-file + rename).
 
 **Multi-output selection (`render`, `validate`, `explain`).** With no
-`--only`, `render`/`validate`/`explain` act on every output the target
-produces. `--only NAME` scopes any of them to a single named output (an
-unknown name, or one the target doesn't produce, is a config error). Two
-flags can only ever apply to one output at a time:
+`--only`, `render`/`validate`/`explain` act on every `scope: target` output
+the target produces — `scope: aggregate` outputs are silently skipped (no
+note on stderr; it would fire on every single-host render). `--only NAME`
+scopes any of them to a single named output (an unknown name, or one the
+target doesn't produce, is a config error); naming an aggregate output with
+`--only` on `render`/`validate` (with a `TARGET`) is a config error pointing
+at `render-all`/`validate-all --only NAME` instead — see "Aggregate outputs".
+Two flags can only ever apply to one output at a time:
 
 - `--stdout` prints one output's text. With `--only`, that's the one printed.
   Without it: a target producing exactly one output prints that one; a
@@ -807,6 +1027,18 @@ flags can only ever apply to one output at a time:
 
 All diagnostics (warnings, errors, progress) go to stderr regardless of
 `--stdout`.
+
+**`render-all`/`validate-all --only NAME`.** Scopes the whole run to a
+single output, of either scope — the fast iteration loop for authoring an
+aggregate output without re-rendering every per-target output too. Naming a
+`scope: target` output renders/validates just that output for every target
+(no aggregate output runs); naming a `scope: aggregate` output skips
+per-target rendering entirely and just composes that one output. `--stdout`
+and `--output PATH` on `render-all` are only meaningful (one file,
+unambiguous) together with `--only` naming an aggregate output — using
+either without that is a config error. If any target fails, aggregate
+outputs are skipped entirely (a partial aggregate document is worse than
+none) and the skip is reported on stderr; see "Aggregate outputs".
 
 `inspect` shows resolved groups, per-output fragment order, and variables,
 redacting any variable whose name contains `password`, `secret`, `token`,
@@ -825,29 +1057,59 @@ literal values (captures are still never executed for inspection).
 ## Example project: Ubuntu autoinstall
 
 The repository ships a complete example that renders Ubuntu 24.04 autoinstall
-`user-data` plus a cloud-init `meta-data` file per target, demonstrating both
-that all autoinstall specifics live in data and how multi-output routing
-works in practice:
+`user-data` plus a cloud-init `meta-data` file per target, and a `scope:
+aggregate` Ansible inventory across every target, demonstrating multi-output
+routing and both output scopes in practice:
 
-- `example/yaml-frag.yaml` declares two outputs: `user-data` (`template:
+- `example/yaml-frag.yaml` declares three outputs: `user-data` (`template:
   templates/user-data.tmpl`, which adds the `#cloud-config` header; `path:
   rendered/{target}/user-data`; marked `default: true`; declares the optional
-  `subiquity` validator) and `meta-data` (`path:
-  rendered/{target}/meta-data`, no template).
+  `subiquity` validator), `meta-data` (`path:
+  rendered/{target}/meta-data`, no template), and `ansible-inventory`
+  (`scope: aggregate`; `path: rendered/inventory.yaml`, a single fixed file
+  for the whole run; `schema: schemas/ansible-inventory.schema.json` for
+  whole-document validation — see "Aggregate outputs" for why an aggregate
+  output can't use the trailing-assertion-fragment idiom the other two do).
 - `example/inventory/targets.yaml` routes fragments to each output under
   `outputs.<name>.fragments` at every layer; `outputs.meta-data.fragments:
-  [meta/instance-id]` is declared once, in `defaults`, so every target gets
-  it.
+  [meta/instance-id]` and `outputs.ansible-inventory.fragments:
+  [ansible/host]` are each declared once, in `defaults`, so every target
+  gets them. Each hardware group (`gb10`, `generic_vm`) also sets
+  `ansible_group`, and each target sets `ansible_host` — both consumed only
+  by `ansible/host`.
 - `example/fragments/autoinstall/base.yaml`, `default-user.yaml`, and
   `checks.yaml`, `example/fragments/ubuntu-24.04.yaml`,
   `example/fragments/hardware/*`, `example/fragments/roles/*`, and
   `example/fragments/hosts/*` build and assert the `user-data` document;
   `example/fragments/meta/instance-id.yaml` builds the `meta-data` document
-  (just `instance-id` and `local-hostname`, both from `identity_hostname`).
+  (just `instance-id` and `local-hostname`, both from `identity_hostname`);
+  `example/fragments/ansible/host.yaml` builds the `ansible-inventory`
+  document, one target at a time, using a templated operation *path*
+  (`/all/children/{{ ansible_group }}/hosts/{{ target }}`) to place each
+  contributing target under its own key of the shared document.
 - Each target's `identity_password_hash` is a `capture` source that runs
   `openssl passwd -6` over the plaintext password held in the secret store
   (`example/inventory/secrets.example.yaml` shows the shape).
-- No autoinstall knowledge exists in `src/yaml_frag/`.
+- No autoinstall (or Ansible) knowledge exists in `src/yaml_frag/`.
+
+```bash
+yaml-frag render-all --only ansible-inventory --stdout --config example/yaml-frag.yaml --secrets example/inventory/secrets.example.yaml
+```
+
+```yaml
+all:
+  children:
+    gb10:
+      hosts:
+        gb10-01:
+          ansible_host: 10.0.0.11
+        gb10-02:
+          ansible_host: 10.0.0.12
+    generic_vm:
+      hosts:
+        generic-vm-01:
+          ansible_host: 10.0.0.21
+```
 
 Expected render for target `gb10-01` (the password hash varies run to run —
 `openssl passwd -6` uses a random salt; the committed test snapshots pin it

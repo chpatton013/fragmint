@@ -21,6 +21,14 @@ yaml-frag render <target> --output tests/fixtures/expected/<target>/user-data
 
 Review the diff before committing — the snapshot is the reviewed contract.
 
+`tests/fixtures/expected/ansible-inventory.yaml` is the analogous snapshot for
+the example project's `scope: aggregate` output (README.md "Aggregate
+outputs"), composed once across every target rather than per target:
+
+```bash
+yaml-frag render-all --only ansible-inventory --output tests/fixtures/expected/ansible-inventory.yaml
+```
+
 ## Malformed inputs
 
 Put intentionally-broken configs/inventories/fragments used by negative tests

@@ -1,0 +1,19 @@
+fragment:
+  version: 1
+  description: >-
+    Register this target under its hardware group in the aggregate Ansible
+    inventory (README.md "Aggregate outputs"). The path itself is templated
+    with the reserved `target` variable, so this one fragment, applied once
+    per contributing target, writes each target under a distinct key of the
+    same shared document.
+
+requires:
+  variables:
+    - ansible_group
+    - ansible_host
+
+operations:
+  - op: merge
+    path: "/all/children/{{ ansible_group }}/hosts/{{ target }}"
+    value:
+      ansible_host: "{{ ansible_host }}"

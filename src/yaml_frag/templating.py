@@ -2,24 +2,22 @@
 
 See README.md "Template rendering".
 
-Requirements to implement:
-- Use a strict undefined (``jinja2.StrictUndefined``) so a missing variable
-  raises rather than substituting an empty string.
-- Use a sandboxed environment (``jinja2.sandbox.SandboxedEnvironment`` or
-  ``NativeEnvironment`` wrapped for safety) so no arbitrary Python execution,
-  filesystem, environment, subprocess, or object internals are reachable.
-- Preserve native types: when the ENTIRE scalar is a single ``{{ expr }}``,
-  the result keeps its Python/YAML type (e.g. Boolean ``false``, not the
-  string ``"False"``). Use a native-environment strategy or detect the
-  "whole string is one expression" case and coerce accordingly.
-- Expose only the safe filters listed in README.md: ``default``, ``lower``,
-  ``upper``, ``replace``, ``join``, ``tojson``.
-- Rendering applies to already-parsed scalar strings only. Never reparse the
-  result as YAML (README.md "Template rendering").
+Properties this module guarantees:
+- A missing variable raises rather than substituting an empty string
+  (``jinja2.StrictUndefined``).
+- No arbitrary Python execution, filesystem, environment, subprocess, or
+  object internals are reachable (``jinja2.sandbox.SandboxedEnvironment``).
+- Native types survive: when the ENTIRE scalar is a single ``{{ expr }}``, the
+  result keeps its Python/YAML type (e.g. Boolean ``false``, not the string
+  ``"False"``) — that case is detected and evaluated as an expression rather
+  than rendered as text.
+- Only the safe filters listed in README.md are exposed: ``default``,
+  ``lower``, ``upper``, ``replace``, ``join``, ``tojson``.
+- Rendering applies to already-parsed scalar strings only; the result is never
+  reparsed as YAML (README.md "Template rendering").
 
-Errors must be raised as
-:class:`~yaml_frag.errors.TemplateRenderError` and include the target name,
-fragment name, operation index, and missing/failed variable name.
+Failures raise :class:`~yaml_frag.errors.TemplateRenderError`, including the
+target name, fragment name, operation index, and missing/failed variable name.
 """
 
 from __future__ import annotations
