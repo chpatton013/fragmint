@@ -81,7 +81,7 @@ def load_inventory(path: Path) -> Inventory:
 
     try:
         raw = load_file(path)
-    except Exception as exc:  # noqa: BLE001 - re-raise with inventory context
+    except Exception as exc:
         raise InventoryError(f"cannot parse inventory {path}: {exc}") from exc
 
     if not isinstance(raw, dict):
@@ -257,7 +257,7 @@ def load_secret_store(path: Path) -> SecretStore:
 
     try:
         raw = load_file(path)
-    except Exception as exc:  # noqa: BLE001 - re-raise with secrets-file context
+    except Exception as exc:
         raise InventoryError(f"cannot parse secrets file {path}: {exc}") from exc
 
     if not isinstance(raw, dict):

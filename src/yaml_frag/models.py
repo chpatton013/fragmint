@@ -15,18 +15,18 @@ these aliases in one place so every module agrees on the shapes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal, Union
+from typing import Literal
 
 #: A node in a parsed YAML/JSON document.
-YamlValue = Union[
-    None,
-    bool,
-    int,
-    float,
-    str,
-    list["YamlValue"],
-    dict[str, "YamlValue"],
-]
+YamlValue = (
+    None
+    | bool
+    | int
+    | float
+    | str
+    | list["YamlValue"]
+    | dict[str, "YamlValue"]
+)
 
 #: The flat variable map used for template rendering and required-variable
 #: checks. After resolution these are concrete :data:`YamlValue`s; before
@@ -62,13 +62,13 @@ class CaptureSource:
     ``trim`` strips a single trailing newline (default ``True``).
     """
 
-    command: tuple["VariableSource", ...]
-    stdin: "VariableSource | None" = None
+    command: tuple[VariableSource, ...]
+    stdin: VariableSource | None = None
     trim: bool = True
 
 
 #: A parsed variable value source. See :mod:`sources`.
-VariableSource = Union[LiteralSource, SecretSource, CaptureSource]
+VariableSource = LiteralSource | SecretSource | CaptureSource
 
 
 @dataclass(frozen=True)
@@ -241,9 +241,9 @@ class OutputSpec:
     target produces more than one output and no ``--only`` is given (see
     README.md "CLI usage"); an aggregate output may never be ``default: true``
     (also enforced in :mod:`config`) since ``default`` exists solely to
-    disambiguate per-target commands. ``scope`` is ``"target"`` (one document
-    per target — today's behavior) or ``"aggregate"`` (one document composed
-    across every contributing target; see README.md "Aggregate outputs").
+    disambiguate per-target commands. ``scope`` is ``"target"`` (the default:
+    one document per target) or ``"aggregate"`` (one document composed across
+    every contributing target; see README.md "Aggregate outputs").
     """
 
     path: str = "rendered/{target}"

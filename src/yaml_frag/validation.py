@@ -59,11 +59,10 @@ def check_unresolved_markers(document: YamlValue) -> None:
         elif isinstance(node, list):
             for index, item in enumerate(node):
                 _walk(item, f"{path}/{index}")
-        elif isinstance(node, str):
-            if "{{" in node or "{%" in node:
-                raise ValidationError(
-                    f"unresolved template marker at {path or '/'}: {node!r}"
-                )
+        elif isinstance(node, str) and ("{{" in node or "{%" in node):
+            raise ValidationError(
+                f"unresolved template marker at {path or '/'}: {node!r}"
+            )
 
     _walk(document, "")
 
@@ -101,7 +100,7 @@ def run_validator(output_path: Path, command: tuple[str, ...]) -> None:
     """
     argv = [*command, str(output_path)]
     try:
-        completed = subprocess.run(  # noqa: S603 - argv list, shell=False by design
+        completed = subprocess.run(
             argv,
             capture_output=True,
             text=True,

@@ -128,7 +128,7 @@ def load_fragment(fragments_dir: Path, name: str) -> Fragment:
 
     try:
         raw = load_file(path)
-    except Exception as exc:  # noqa: BLE001 - re-raise with fragment context
+    except Exception as exc:
         raise FragmentError(f"cannot parse fragment {name} ({path}): {exc}") from exc
 
     if not isinstance(raw, dict):

@@ -43,7 +43,8 @@ instead of running real programs (see ``tests/test_sources.py``).
 from __future__ import annotations
 
 import subprocess
-from typing import Protocol, Sequence
+from collections.abc import Sequence
+from typing import Protocol
 
 from .errors import CaptureError, ConfigError, SecretNotFoundError
 from .models import (
@@ -85,7 +86,9 @@ class DefaultCommandRunner:
     def run(self, command: Sequence[str], *, stdin: str | None, timeout: float) -> str:
         argv = list(command)
         try:
-            completed = subprocess.run(  # noqa: S603 - argv list, shell=False by design
+            # An argv list with shell=False, by design: there is no shell for a
+            # captured value to be injected into (README.md "Security").
+            completed = subprocess.run(
                 argv,
                 input=stdin,
                 capture_output=True,
@@ -252,7 +255,7 @@ def resolve_source(
             stdout = runner.run(argv, stdin=stdin_text, timeout=timeout)
         except CaptureError:
             raise
-        except Exception as exc:  # noqa: BLE001 - surface as CaptureError, no raw args
+        except Exception as exc:
             raise CaptureError(
                 f"target {target!r}: variable {variable!r}: "
                 f"capture command {command_name!r} failed: {exc}"

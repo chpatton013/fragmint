@@ -569,8 +569,9 @@ def test_diagnostics_go_to_stderr(
 
 
 def test_parse_var_rejects_missing_equals() -> None:
-    from yaml_frag.cli import _parse_var
     import click
+
+    from yaml_frag.cli import _parse_var
 
     with pytest.raises(click.BadParameter):
         _parse_var(None, None, ("no-equals-sign",))  # type: ignore[arg-type]

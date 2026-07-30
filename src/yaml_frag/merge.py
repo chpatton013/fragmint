@@ -33,7 +33,7 @@ so provenance and override reporting stay accurate.
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from . import pointer
 from .errors import AssertionFailedError, MergeConflictError

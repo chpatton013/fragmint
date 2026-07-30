@@ -128,7 +128,7 @@ def load_config(path: Path | None = None) -> ProjectConfig:
 
     try:
         raw = load_file(config_path)
-    except Exception as exc:  # noqa: BLE001 - re-raise with config context
+    except Exception as exc:
         raise ConfigError(f"cannot parse project configuration {config_path}: {exc}") from exc
 
     if not isinstance(raw, dict):

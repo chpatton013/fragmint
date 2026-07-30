@@ -763,7 +763,9 @@ def inspect(
     See README.md "CLI usage".
     """
     cfg = config_mod.load_config(config_path)
-    inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
+    # `inspect` reports resolved inventory data only; it never loads fragments,
+    # so the resolved fragments directory is deliberately unused here.
+    inv_path, _ = _resolve_inputs(cfg, inventory_path, fragments_dir)
     inv = inventory_mod.load_inventory(inv_path)
     resolved = inventory_mod.resolve_target(inv, target, cli_variables=cast(Variables, cli_variables))
 
