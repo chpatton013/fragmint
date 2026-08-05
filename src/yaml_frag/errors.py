@@ -26,10 +26,12 @@ class YamlFragError(Exception):
     exit_code: ExitCode = ExitCode.RENDER_FAILURE
 
 
-class ConfigError(YamlFragError):
-    """The project-configuration file is missing, malformed, or invalid."""
+class ModuleError(YamlFragError):
+    """A module or inventory document is missing, malformed, internally
+    inconsistent, or its import closure is invalid (name collision, aliasing,
+    a cycle, an undefined output, a containment violation, and the like)."""
 
-    exit_code = ExitCode.CONFIG_ERROR
+    exit_code = ExitCode.MODULE_ERROR
 
 
 class InventoryError(YamlFragError):

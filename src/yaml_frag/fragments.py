@@ -1,11 +1,13 @@
-"""Fragment resolution, loading, and validation.
+"""Fragment loading and validation.
 
-See README.md "Authoring fragments" and "Validation".
+See README.md "Authoring fragments" and "Validation". Resolving a fragment
+*reference* to a file path — bare vs. module-qualified, which directory it's
+relative to, and containment within that module's own tree — lives in
+:mod:`modules` (:func:`yaml_frag.modules.fragment_path`); this module loads
+and validates whatever file that resolution names.
 
 Responsibilities:
-1. Resolve a fragment reference (e.g. ``hardware/gb10``) to a file path under
-   the fragments directory (``fragments/hardware/gb10.yaml``).
-2. Parse and validate the fragment against ``schemas/fragment.schema.json`` and
+1. Parse and validate the fragment against ``schemas/fragment.schema.json`` and
    the rules in README.md "Validation":
    - supported ``fragment.version``;
    - each operation ``op`` is recognized;
@@ -14,7 +16,7 @@ Responsibilities:
    - ``append``/``prepend`` values are lists;
    - ``merge`` values are mappings;
    - assertions use a supported form.
-3. Return a fully-typed :class:`~models.Fragment`.
+2. Return a fully-typed :class:`~models.Fragment`.
 """
 
 from __future__ import annotations
@@ -45,17 +47,6 @@ ASSERTION_TYPES = frozenset({"mapping", "list", "string", "integer", "boolean"})
 def _schema_path(name: str) -> Path:
     """Resolve a packaged tool-format schema under ``yaml_frag/schemas/``."""
     return Path(__file__).resolve().parent / "schemas" / name
-
-
-def resolve_fragment_path(fragments_dir: Path, name: str) -> Path:
-    """Map a fragment reference to its file path.
-
-    ``resolve_fragment_path(Path("fragments"), "hardware/gb10")`` ->
-    ``fragments/hardware/gb10.yaml``. Does not check existence here; the loader
-    raises :class:`~yaml_frag.errors.UnknownFragmentError` if the
-    file is missing.
-    """
-    return fragments_dir / f"{name}.yaml"
 
 
 def _parse_operation(name: str, index: int, raw: dict[str, Any]) -> FragmentOperation:
@@ -114,15 +105,18 @@ def _parse_operation(name: str, index: int, raw: dict[str, Any]) -> FragmentOper
     )
 
 
-def load_fragment(fragments_dir: Path, name: str) -> Fragment:
-    """Load, validate, and return the fragment referenced by ``name``.
+def load_fragment(path: Path, name: str) -> Fragment:
+    """Load, validate, and return the fragment file at ``path``.
 
-    Raise :class:`~yaml_frag.errors.UnknownFragmentError` if the
-    file does not exist, and
-    :class:`~yaml_frag.errors.FragmentError` for any validation failure, with
-    fragment name context.
+    ``path`` is an already-resolved, containment-checked absolute path (see
+    :func:`yaml_frag.modules.fragment_path`). ``name`` is the fragment's
+    qualified reference (see :func:`yaml_frag.modules.display_ref`), used for
+    diagnostics and provenance — bare only when the fragment resolved to the
+    root document, module-qualified otherwise. Raise
+    :class:`~yaml_frag.errors.UnknownFragmentError` if the file does not
+    exist, and :class:`~yaml_frag.errors.FragmentError` for any validation
+    failure, with fragment name context.
     """
-    path = resolve_fragment_path(fragments_dir, name)
     if not path.is_file():
         raise UnknownFragmentError(f"fragment {name!r} not found (expected at {path})")
 

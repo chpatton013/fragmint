@@ -1,0 +1,69 @@
+# A reusable module for Ubuntu autoinstall `user-data`/`meta-data` documents.
+# See README.md "The module model".
+#
+# This module owns the `user-data` and `meta-data` outputs end to end: their
+# path/template/schema, and the fragments every target gets by default.
+# `fragments_dir`/`templates_dir` are inferred (./fragments, ./templates —
+# both exist here, so no explicit declaration is needed).
+version: 1
+
+outputs:
+  user-data:
+    # "{target}" is substituted with the target name.
+    path: "rendered/{target}/user-data"
+    # The serialized YAML replaces the literal token "{{ document }}" in this
+    # file. This is what prepends "#cloud-config".
+    template: user-data.tmpl
+    # The output implied by e.g. `--stdout` when a target produces more than
+    # one output and no `--only` is given.
+    default: true
+
+  meta-data:
+    path: "rendered/{target}/meta-data"
+
+defaults:
+  outputs:
+    # Every importer's targets get these by default; a target opts out only
+    # by belonging to no group and having no target-level fragments either.
+    user-data:
+      fragments:
+        - autoinstall/base
+        - autoinstall/default-user
+        - ubuntu-24.04
+    meta-data:
+      fragments:
+        - meta/instance-id
+
+groups:
+  gb10:
+    outputs:
+      user-data:
+        fragments:
+          - hardware/gb10
+  generic_vm:
+    outputs:
+      user-data:
+        fragments:
+          - hardware/generic-vm
+  general_servers:
+    outputs:
+      user-data:
+        fragments:
+          - roles/general-server
+  proxmox_hosts:
+    outputs:
+      user-data:
+        fragments:
+          - roles/proxmox-host
+  docker_hosts:
+    outputs:
+      user-data:
+        fragments:
+          - roles/docker-host
+
+# Named external validators, selected with --validator NAME.
+validators:
+  subiquity:
+    command:
+      - python3
+      - tools/validate-autoinstall-user-data.py

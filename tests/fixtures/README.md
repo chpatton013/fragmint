@@ -31,6 +31,6 @@ yaml-frag render-all --only ansible-inventory --output tests/fixtures/expected/a
 
 ## Malformed inputs
 
-Put intentionally-broken configs/inventories/fragments used by negative tests
-under `tests/fixtures/invalid/` (e.g. fragment name mismatch, unknown group,
-bad op, wrong-version project config).
+Put intentionally-broken documents/fragments used by negative tests under
+`tests/fixtures/invalid/` (e.g. fragment name mismatch, unknown group, bad
+op, wrong-version document).

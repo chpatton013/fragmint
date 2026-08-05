@@ -15,9 +15,9 @@ venv/
 .coverage
 htmlcov/
 
-# Rendered output (keep the directory, ignore its contents)
-/example/rendered/*
-!/example/rendered/.gitkeep
+# Rendered output (keep the directories, ignore their contents)
+/example/modules/*/rendered/*
+!/example/modules/*/rendered/.gitkeep
 
 # Local, untracked secrets overlay (see README.md "Secrets")
-example/inventory/secrets.yaml
+example/secrets.yaml

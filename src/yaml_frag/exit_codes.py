@@ -18,7 +18,10 @@ class ExitCode(IntEnum):
     RENDER_FAILURE = 1
     #: Invalid command-line usage (bad flags, arguments, etc.).
     USAGE = 2
-    #: Inventory failed validation.
+    #: Resolving a target against the flattened closure failed: an unknown
+    #: target, an undefined group, a reserved variable name, or an unreadable
+    #: secrets file. Distinct from :data:`MODULE_ERROR`, which is about loading
+    #: the documents themselves.
     INVENTORY_VALIDATION = 3
     #: A fragment failed validation.
     FRAGMENT_VALIDATION = 4
@@ -27,8 +30,9 @@ class ExitCode(IntEnum):
     #: The rendered document failed validation (generic check, schema,
     #: assertion, or external validator).
     RENDERED_VALIDATION = 6
-    #: The project-configuration file is missing or invalid.
-    CONFIG_ERROR = 7
+    #: A module or inventory document is missing, invalid, or its import
+    #: closure is inconsistent (collision, aliasing, cycle, undefined output).
+    MODULE_ERROR = 7
     #: A variable value source could not be resolved (secret not found, or a
     #: capture subprocess failed).
     VARIABLE_RESOLUTION = 8

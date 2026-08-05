@@ -46,7 +46,7 @@ import subprocess
 from collections.abc import Sequence
 from typing import Protocol
 
-from .errors import CaptureError, ConfigError, SecretNotFoundError
+from .errors import CaptureError, ModuleError, SecretNotFoundError
 from .models import (
     CaptureSource,
     LiteralSource,
@@ -128,7 +128,7 @@ def parse_source(raw: YamlValue) -> VariableSource:
     for its kind (correct fields present, ``command`` non-empty for capture,
     ``name`` present for secret) and its nested ``command``/``stdin`` sources
     are parsed recursively. Raise :class:`~errors.VariableResolutionError` (or
-    :class:`~errors.ConfigError` for a structurally invalid source) with the
+    :class:`~errors.ModuleError` for a structurally invalid source) with the
     offending shape described.
     """
     if not is_source(raw):
@@ -138,19 +138,19 @@ def parse_source(raw: YamlValue) -> VariableSource:
 
     if kind == "literal":
         if "value" not in raw:
-            raise ConfigError("invalid `from: literal` source: missing `value` field")
+            raise ModuleError("invalid `from: literal` source: missing `value` field")
         return LiteralSource(value=raw["value"])
 
     if kind == "secret":
         name = raw.get("name")
         if not isinstance(name, str) or not name:
-            raise ConfigError("invalid `from: secret` source: missing or empty `name` field")
+            raise ModuleError("invalid `from: secret` source: missing or empty `name` field")
         return SecretSource(name=name)
 
     if kind == "capture":
         command_raw = raw.get("command")
         if not isinstance(command_raw, list) or not command_raw:
-            raise ConfigError(
+            raise ModuleError(
                 "invalid `from: capture` source: `command` must be a non-empty list"
             )
         command = tuple(parse_source(item) for item in command_raw)
@@ -158,10 +158,10 @@ def parse_source(raw: YamlValue) -> VariableSource:
         stdin = parse_source(stdin_raw) if stdin_raw is not None else None
         trim_raw = raw.get("trim", True)
         if not isinstance(trim_raw, bool):
-            raise ConfigError("invalid `from: capture` source: `trim` must be a boolean")
+            raise ModuleError("invalid `from: capture` source: `trim` must be a boolean")
         return CaptureSource(command=command, stdin=stdin, trim=trim_raw)
 
-    raise ConfigError(f"invalid variable source: unrecognized `from` value {kind!r}")
+    raise ModuleError(f"invalid variable source: unrecognized `from` value {kind!r}")
 
 
 def _is_sensitive(source: VariableSource) -> bool:
@@ -265,7 +265,7 @@ def resolve_source(
             stdout = stdout[:-1]
         return stdout
 
-    raise ConfigError(f"unrecognized variable source: {source!r}")
+    raise ModuleError(f"unrecognized variable source: {source!r}")
 
 
 def resolve_variables(

@@ -1,20 +1,11 @@
-"""Inventory loading, validation, and per-target resolution.
+"""Per-target resolution and the secret store.
 
-See README.md "Authoring inventory", "Fragment order", "Variable precedence",
-"Secrets", and "Validation".
-
-Responsibilities:
-1. Parse the inventory YAML into an :class:`~models.Inventory`. Each of
-   ``defaults``/a group/a target declares its own per-output fragment
-   contribution under an ``outputs:`` map (output name -> ``{fragments: [...]}``);
-   output names are project-defined and not validated against the project
-   config here (that cross-file check happens in :mod:`render`, which has both).
-2. Validate it against ``schemas/inventory.schema.json`` and the structural
-   rules in README.md (unique target/group names, referenced groups exist,
-   fragments are lists of strings, variables are mappings, order preserved, no
-   group cycles if nested groups are added).
-3. Resolve a single target into a :class:`~models.ResolvedTarget` with the
-   final ordered per-output fragment lists and fully layered variable map.
+See README.md "Authoring inventory", "Fragment order", "Variable
+precedence", and "Secrets". Loading the inventory document itself — parsing,
+schema validation, the import closure, and reference resolution — lives in
+:mod:`modules`; this module resolves a single target, out of an already
+flattened :class:`~yaml_frag.models.Project`, into a
+:class:`~yaml_frag.models.ResolvedTarget`.
 
 This module must contain NO domain-specific knowledge (README.md "Design
 principles": separation of data and rendering logic).
@@ -28,15 +19,7 @@ from typing import Any, cast
 import jsonschema
 
 from .errors import InventoryError, UnknownTargetError
-from .models import (
-    GroupDefinition,
-    Inventory,
-    OutputFragments,
-    ResolvedTarget,
-    SecretStore,
-    TargetDefinition,
-    Variables,
-)
+from .models import Project, Ref, ResolvedTarget, SecretStore, Variables
 from .yamlio import load_file
 
 #: Variable names the renderer sets automatically; a project must not define
@@ -47,114 +30,14 @@ from .yamlio import load_file
 #: still rejected here, at the single point where all variable layers merge.
 RESERVED_VARIABLE_NAMES = frozenset({"target", "output"})
 
-#: Characters a target name must not contain because they would corrupt a
-#: JSON Pointer once substituted into an operation path (README.md
-#: "Aggregate outputs" and "Paths": `/` separates pointer tokens and `~`
-#: begins an escape sequence). Rejected at load time, per-target, rather than
-#: escaped on substitution, for a clearer error at the clearer point of fault.
-POINTER_HOSTILE_CHARACTERS = ("/", "~")
-
-
-def _parse_output_fragments(raw: dict[str, Any] | None) -> OutputFragments:
-    """Parse an ``outputs:`` block (defaults/group/target) into name ->
-    ordered fragment tuple."""
-    result: OutputFragments = {}
-    for output_name, output_raw in (raw or {}).items():
-        output_raw = output_raw or {}
-        result[output_name] = tuple(output_raw.get("fragments", []) or [])
-    return result
-
 
 def _schema_path(name: str) -> Path:
     """Resolve a packaged tool-format schema under ``yaml_frag/schemas/``."""
     return Path(__file__).resolve().parent / "schemas" / name
 
 
-def load_inventory(path: Path) -> Inventory:
-    """Load and validate the inventory file.
-
-    Raise :class:`~yaml_frag.errors.InventoryError` (with file/field context)
-    on any schema or structural violation from README.md "Validation".
-    """
-    if not path.is_file():
-        raise InventoryError(f"inventory file not found: {path}")
-
-    try:
-        raw = load_file(path)
-    except Exception as exc:
-        raise InventoryError(f"cannot parse inventory {path}: {exc}") from exc
-
-    if not isinstance(raw, dict):
-        raise InventoryError(f"inventory {path} must be a mapping")
-
-    schema: dict[str, Any] = cast(dict[str, Any], load_file(_schema_path("inventory.schema.json")))
-    try:
-        jsonschema.validate(instance=raw, schema=schema)
-    except jsonschema.ValidationError as exc:
-        raise InventoryError(
-            f"inventory {path} failed schema validation: {exc.message} "
-            f"(at {'/'.join(str(part) for part in exc.path)})"
-        ) from exc
-
-    # Schema validation above guarantees the shape README.md documents; treat the
-    # parsed document as loosely-typed data from here on rather than fighting
-    # the recursive YamlValue union.
-    doc = cast(dict[str, Any], raw)
-
-    version = doc.get("version")
-    if version != 1:
-        raise InventoryError(f"inventory {path}: unsupported version {version!r}, expected 1")
-
-    defaults_raw = doc.get("defaults", {}) or {}
-    default_variables: Variables = dict(defaults_raw.get("variables", {}) or {})
-    default_output_fragments = _parse_output_fragments(defaults_raw.get("outputs"))
-
-    groups: dict[str, GroupDefinition] = {}
-    for name, group_raw in (doc.get("groups", {}) or {}).items():
-        group_raw = group_raw or {}
-        groups[name] = GroupDefinition(
-            name=name,
-            variables=dict(group_raw.get("variables", {}) or {}),
-            output_fragments=_parse_output_fragments(group_raw.get("outputs")),
-        )
-
-    targets: dict[str, TargetDefinition] = {}
-    targets_raw = doc.get("targets", {}) or {}
-    for name, target_raw in targets_raw.items():
-        if any(char in name for char in POINTER_HOSTILE_CHARACTERS):
-            raise InventoryError(
-                f"inventory {path}: target name {name!r} must not contain "
-                f"{' or '.join(repr(c) for c in POINTER_HOSTILE_CHARACTERS)} — "
-                f"it would corrupt a JSON Pointer once substituted into an "
-                f"operation path (e.g. via the reserved `{{{{ target }}}}` "
-                f"variable in a templated path)"
-            )
-        target_raw = target_raw or {}
-        target_groups = tuple(target_raw.get("groups", []) or [])
-        for group_name in target_groups:
-            if group_name not in groups:
-                raise InventoryError(
-                    f"inventory {path}: target {name!r} references undefined group "
-                    f"{group_name!r}"
-                )
-        targets[name] = TargetDefinition(
-            name=name,
-            groups=target_groups,
-            output_fragments=_parse_output_fragments(target_raw.get("outputs")),
-            variables=dict(target_raw.get("variables", {}) or {}),
-        )
-
-    return Inventory(
-        version=version,
-        default_variables=default_variables,
-        default_output_fragments=default_output_fragments,
-        groups=groups,
-        targets=targets,
-    )
-
-
 def resolve_target(
-    inventory: Inventory,
+    project: Project,
     target_name: str,
     *,
     cli_variables: Variables | None = None,
@@ -162,21 +45,27 @@ def resolve_target(
     """Resolve one target's final per-output fragments and (still-unresolved)
     variables.
 
-    Fragment order, per output (README.md "Fragment order") — precedence is
-    positional:
-        1. inventory ``defaults.outputs.<name>.fragments``
-        2. each group's ``outputs.<name>.fragments``, in the target's group order
-        3. target ``outputs.<name>.fragments``
+    Fragment order, per output (README.md "Fragment order" and "Composition
+    and ordering") — precedence is positional:
+        1. every module's ``defaults.outputs.<name>.fragments``, in closure
+           order, followed by the inventory's own (already concatenated into
+           ``project.default_output_fragments`` by :func:`modules.flatten`);
+        2. each group the target lists' ``outputs.<name>.fragments``, in the
+           target's group order (each group's own fragments already merged
+           across the documents that defined it, in closure order);
+        3. the target's own ``outputs.<name>.fragments``.
     Group and fragment order MUST be preserved (never alphabetized). An output
     name that no layer contributes fragments to is omitted from the result
     entirely — that output is simply not produced for this target.
 
     Variable precedence (README.md "Variable precedence"), later wins, and is
     NOT per-output (variables are shared across all of a target's outputs):
-        1. inventory ``defaults.variables``
-        2. group variables, in target group order
-        3. target variables
-        4. ``cli_variables`` (always literal strings)
+        1. ``project.default_variables`` (every module's defaults, closure
+           order, then the inventory's — already layered by
+           :func:`modules.flatten`);
+        2. group variables, in target group order;
+        3. target variables;
+        4. ``cli_variables`` (always literal strings).
 
     The returned ``variables`` are LAYERED BUT UNRESOLVED: a value may be an
     untagged literal or a ``from:`` source mapping. Secrets are not a
@@ -197,17 +86,17 @@ def resolve_target(
     and :class:`~yaml_frag.errors.InventoryError` for a referenced-but-undefined
     group or an attempt to define a reserved variable name.
     """
-    target = inventory.targets.get(target_name)
+    target = project.targets.get(target_name)
     if target is None:
         raise UnknownTargetError(f"unknown target: {target_name!r}")
 
-    output_fragments: dict[str, list[str]] = {
-        name: list(fragments) for name, fragments in inventory.default_output_fragments.items()
+    output_fragments: dict[str, list[Ref]] = {
+        name: list(fragments) for name, fragments in project.default_output_fragments.items()
     }
-    variables: Variables = dict(inventory.default_variables)
+    variables: Variables = dict(project.default_variables)
 
     for group_name in target.groups:
-        group = inventory.groups.get(group_name)
+        group = project.groups.get(group_name)
         if group is None:
             raise InventoryError(
                 f"target {target_name!r} references undefined group {group_name!r}"
@@ -274,3 +163,6 @@ def load_secret_store(path: Path) -> SecretStore:
 
     doc = cast(dict[str, Any], raw)
     return SecretStore(secrets=dict(doc.get("secrets", {}) or {}))
+
+
+__all__ = ["RESERVED_VARIABLE_NAMES", "load_secret_store", "resolve_target"]

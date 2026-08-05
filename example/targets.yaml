@@ -1,0 +1,97 @@
+# The inventory: the render root. See README.md "Authoring inventory" and
+# "The module model".
+#
+# This project renders two named outputs per target — `user-data` and
+# `meta-data` — plus one `scope: aggregate` Ansible inventory composed across
+# every target, demonstrating multi-output routing and both output scopes.
+# Both are owned by imported modules; this document supplies only the
+# site-specific data: defaults, groups, and targets.
+version: 1
+
+imports:
+  autoinstall: modules/autoinstall
+  ansible: modules/ansible
+
+defaults:
+  variables:
+    identity_username: chris
+    ssh_import_id: gh:chpatton013
+    locale: en_US.UTF-8
+    keyboard_layout: us
+
+groups:
+  # Each of these merges with the same-named group shipped by an imported
+  # module (README.md "Composition and ordering": variables layer, fragments
+  # concatenate, both in closure order) — this inventory adds the
+  # site-specific `hardware_model`, the module(s) add fragments/variables of
+  # their own.
+  gb10:
+    variables:
+      hardware_model: gb10
+  generic_vm:
+    variables:
+      hardware_model: generic-vm
+
+targets:
+  # Each target ends its user-data fragment list with autoinstall's `checks`
+  # fragment so the structural assertions run against the fully composed
+  # document. This is how document-specific validation is expressed — via
+  # fragments, not built into the renderer.
+  gb10-01:
+    groups:
+      - gb10
+      - general_servers
+    outputs:
+      user-data:
+        fragments:
+          - hosts/gb10-01
+          - autoinstall:autoinstall/checks
+    variables:
+      identity_hostname: gb10-01
+      # Computed at render time: feed the plaintext password secret to
+      # `openssl passwd -6` on stdin and capture the resulting hash.
+      # See README.md "Variable value sources". Requires --secrets.
+      identity_password_hash:
+        from: capture
+        command: [openssl, passwd, -6, -stdin]
+        stdin: { from: secret, name: gb10-01_password }
+      primary_interface: enP7s7
+      # Consumed only by ansible/host, for the aggregate ansible-inventory
+      # output (README.md "Aggregate outputs").
+      ansible_host: "10.0.0.11"
+
+  gb10-02:
+    groups:
+      - gb10
+      - general_servers
+    outputs:
+      user-data:
+        fragments:
+          - hosts/gb10-02
+          - autoinstall:autoinstall/checks
+    variables:
+      identity_hostname: gb10-02
+      identity_password_hash:
+        from: capture
+        command: [openssl, passwd, -6, -stdin]
+        stdin: { from: secret, name: gb10-02_password }
+      primary_interface: enP7s7
+      ansible_host: "10.0.0.12"
+
+  generic-vm-01:
+    groups:
+      - generic_vm
+      - general_servers
+    outputs:
+      user-data:
+        fragments:
+          - hosts/generic-vm-01
+          - autoinstall:autoinstall/checks
+    variables:
+      identity_hostname: generic-vm-01
+      identity_password_hash:
+        from: capture
+        command: [openssl, passwd, -6, -stdin]
+        stdin: { from: secret, name: generic-vm-01_password }
+      primary_interface: enp1s0
+      ansible_host: "10.0.0.21"

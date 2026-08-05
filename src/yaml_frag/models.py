@@ -83,20 +83,49 @@ class SecretStore:
     secrets: dict[str, YamlValue] = field(default_factory=dict)
 
 
-#: Per-output fragment lists, keyed by output name (see README.md "Project
-#: configuration" and "Fragment order"). Each layer (defaults/group/target)
-#: declares only the fragments *it* contributes to a given output; the final
-#: list for an output is the positional concatenation across layers.
-OutputFragments = dict[str, tuple[str, ...]]
+@dataclass(frozen=True)
+class Ref:
+    """A reference to a fragment, template, or schema file, resolved to the
+    document it denotes.
+
+    ``module`` is the resolved document's closure-assigned name, or ``None``
+    when the reference resolves to the root document (the inventory) —
+    regardless of whether it was *written* bare or qualified. A bare
+    reference written inside a module resolves to that module's own tree, so
+    its ``module`` here is that module's name, not ``None``; only a
+    reference that resolves all the way to the root carries ``None``. See
+    README.md "The module model" for the parsing/resolution rules and
+    ``modules.display_ref`` for the one function that turns a ``Ref`` back
+    into display text.
+
+    ``path`` is the reference's own path component (without a
+    module prefix), e.g. ``"host"`` for both a bare ``host`` and a qualified
+    ``ansible:host``.
+    """
+
+    module: str | None
+    path: str
+
+
+#: Per-output fragment lists, keyed by output name (see README.md "Authoring
+#: fragments" and "Fragment order"). Each layer (module defaults/inventory
+#: defaults/group/target) declares only the fragments *it* contributes to a
+#: given output, as already-resolved :class:`Ref`s; the final list for an
+#: output is the positional concatenation across layers.
+OutputFragments = dict[str, tuple[Ref, ...]]
 
 
 @dataclass(frozen=True)
 class GroupDefinition:
     """A reusable set of variables and per-output fragments referenced by targets.
 
-    See README.md "Authoring inventory". Group order is significant and must
-    never be reordered. ``output_fragments`` maps output name -> this group's
-    ordered fragment contribution to that output.
+    See README.md "Authoring inventory" and "The module model". A group name
+    defined by several documents in the closure is merged into one of these —
+    variables layer and fragments concatenate, both in closure order — so a
+    module may ship a reusable group that the inventory (or another module)
+    extends. Group order is significant and must never be reordered.
+    ``output_fragments`` maps output name -> this group's ordered, resolved
+    fragment contribution to that output.
     """
 
     name: str
@@ -106,14 +135,16 @@ class GroupDefinition:
 
 @dataclass(frozen=True)
 class TargetDefinition:
-    """A single target as declared in the inventory.
+    """A single target as declared in the inventory (the only document kind
+    that may define targets — see README.md "The module model").
 
     A target is any named thing you render a document for (a machine, an
     environment, a service). ``groups`` and each output's fragment list
     preserve declaration order. ``variables`` are the target-level variables
-    only (defaults/group/secret/CLI layering is resolved later in
-    :mod:`inventory` / :mod:`render`). ``output_fragments`` maps output name ->
-    this target's ordered fragment contribution to that output.
+    only (module-defaults/inventory-defaults/group/secret/CLI layering is
+    resolved later in :mod:`inventory` / :mod:`render`). ``output_fragments``
+    maps output name -> this target's ordered, resolved fragment contribution
+    to that output.
     """
 
     name: str
@@ -123,14 +154,25 @@ class TargetDefinition:
 
 
 @dataclass(frozen=True)
-class Inventory:
-    """The fully parsed inventory document.
+class Project:
+    """The whole import closure, flattened.
 
-    See README.md "Authoring inventory". ``default_variables`` and
-    ``default_output_fragments`` come from the top-level ``defaults`` block.
+    See README.md "The module model" and "Composition and ordering".
+    Produced by :func:`yaml_frag.modules.flatten` from a
+    :class:`~yaml_frag.modules.Closure`: every module's and the inventory's
+    ``outputs``/``validators`` unioned (each name defined exactly once across
+    the closure), ``defaults`` variables/fragments layered in closure order,
+    same-named ``groups`` merged across documents, and the root's ``targets``
+    carried through unchanged. This is the single, closure-wide structure
+    :class:`~yaml_frag.render.RenderSession` and :func:`inventory.resolve_target`
+    operate on — the redesign's replacement for the old, separate project
+    config and inventory objects.
     """
 
     version: int
+    outputs: dict[str, OutputSpec] = field(default_factory=dict)
+    default_output: str | None = None
+    validators: dict[str, ValidatorSpec] = field(default_factory=dict)
     default_variables: Variables = field(default_factory=dict)
     default_output_fragments: OutputFragments = field(default_factory=dict)
     groups: dict[str, GroupDefinition] = field(default_factory=dict)
@@ -168,11 +210,12 @@ class FragmentOperation:
 class Fragment:
     """A parsed, schema-valid fragment document.
 
-    See README.md "Authoring fragments". ``name`` is the fragment's reference
-    path relative to the fragments directory (minus ``.yaml``), used for
-    diagnostics and provenance; it is derived from how the fragment was
-    requested, not from the file's contents. Fragments may live under any
-    nested path the project chooses.
+    See README.md "Authoring fragments". ``name`` is the fragment's qualified
+    reference (see ``modules.display_ref``) — bare only when it resolves to
+    the root document, module-qualified otherwise — used for diagnostics and
+    provenance; it is derived from how the fragment was requested, not from
+    the file's contents. Fragments may live under any nested path a module or
+    the inventory chooses.
     """
 
     version: int
@@ -240,7 +283,7 @@ class OutputSpec:
     ``default`` marks the output implied by commands like ``--stdout`` when a
     target produces more than one output and no ``--only`` is given (see
     README.md "CLI usage"); an aggregate output may never be ``default: true``
-    (also enforced in :mod:`config`) since ``default`` exists solely to
+    (also enforced in :mod:`modules`) since ``default`` exists solely to
     disambiguate per-target commands. ``scope`` is ``"target"`` (the default:
     one document per target) or ``"aggregate"`` (one document composed across
     every contributing target; see README.md "Aggregate outputs").
@@ -265,28 +308,6 @@ class ValidatorSpec:
 
     name: str
     command: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class ProjectConfig:
-    """The parsed project-configuration file (``yaml-frag.yaml``).
-
-    See README.md "Project configuration". This is where domain-specific behavior
-    (output template/header, path layout, validators, document schema) lives —
-    never in the renderer code. ``outputs`` is a non-empty map of output name ->
-    :class:`OutputSpec`. ``default_output`` is the name of the output implied
-    when a target produces several and no ``--only``/explicit selection is
-    given: the sole entry when ``outputs`` has exactly one, the one marked
-    ``default: true`` when exactly one is so marked, or ``None`` otherwise (see
-    README.md "CLI usage").
-    """
-
-    version: int
-    inventory: str
-    fragments_dir: str
-    outputs: dict[str, OutputSpec]
-    default_output: str | None
-    validators: dict[str, ValidatorSpec] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

@@ -20,8 +20,8 @@ Serialization requirements (README.md "YAML serialization"):
 - end the file with exactly one newline.
 
 Any header such as ``#cloud-config`` is NOT YAML data; it comes from the
-project's output template, applied by :mod:`render`, not by this module. See
-README.md "Project configuration" and "YAML serialization".
+output's text template, applied by :mod:`render`, not by this module. See
+README.md "The module model" and "YAML serialization".
 
 ``ruamel.yaml`` is recommended for the formatting control above; PyYAML is
 acceptable if the determinism requirements are met.

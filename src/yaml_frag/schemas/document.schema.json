@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/yaml-frag/document.schema.json",
+  "title": "yaml-frag document",
+  "description": "Structural schema shared by every document in an import closure: a module (yaml-frag.yaml) and the inventory (the root document) alike. Only `targets` differs by role, and that difference (targets forbidden in a module, required in the inventory) is enforced in modules.py, not here, so a single schema file covers both and cannot drift between them. Other cross-cutting rules (imports forming a DAG without collision/aliasing, referenced groups existing, an output name being defined exactly once across the closure, containment of resolved references) are also enforced in modules.py.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version"],
+  "properties": {
+    "version": { "const": 1 },
+    "imports": {
+      "type": "object",
+      "description": "Local name -> module directory, resolved relative to this document's own directory.",
+      "additionalProperties": { "type": "string", "minLength": 1 }
+    },
+    "fragments_dir": { "type": "string", "minLength": 1 },
+    "templates_dir": { "type": "string", "minLength": 1 },
+    "schemas_dir": { "type": "string", "minLength": 1 },
+    "outputs": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/output" }
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "variables": { "$ref": "#/$defs/variables" },
+        "outputs": { "$ref": "#/$defs/outputFragments" }
+      }
+    },
+    "groups": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/group" }
+    },
+    "targets": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/target" }
+    },
+    "validators": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/validator" }
+    }
+  },
+  "$defs": {
+    "variables": {
+      "type": "object",
+      "description": "Mapping of variable name to value. Each value is either a literal (scalar/list/mapping) or a `from:` source (secret/capture/literal). Source shapes are validated in sources.py, not here."
+    },
+    "fragmentList": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "outputFragments": {
+      "type": "object",
+      "description": "Mapping of output name to this layer's ordered fragment contribution to that output. Each fragment entry is a reference string: bare (relative to this document's own fragments_dir) or module-qualified (`ns:path`).",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "fragments": { "$ref": "#/$defs/fragmentList" }
+        }
+      }
+    },
+    "group": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "variables": { "$ref": "#/$defs/variables" },
+        "outputs": { "$ref": "#/$defs/outputFragments" }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "groups": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "outputs": { "$ref": "#/$defs/outputFragments" },
+        "variables": { "$ref": "#/$defs/variables" }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "template": { "type": ["string", "null"] },
+        "schema": { "type": ["string", "null"] },
+        "validators": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "default": { "type": "boolean" },
+        "scope": { "enum": ["target", "aggregate"] }
+      }
+    },
+    "validator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        }
+      }
+    }
+  }
+}

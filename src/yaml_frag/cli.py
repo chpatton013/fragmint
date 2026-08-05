@@ -2,11 +2,13 @@
 
 See README.md "CLI usage". This module wires up the command structure,
 options, and the top-level error-to-exit-code mapping; the work itself lives
-in :mod:`config`, :mod:`render`, :mod:`inventory`, and :mod:`provenance`.
+in :mod:`modules`, :mod:`render`, :mod:`inventory`, and :mod:`provenance`.
 
-Domain defaults (inventory/fragments locations, output path/template,
-validators) come from the project configuration (:mod:`config`); the CLI flags
-below override those defaults per invocation.
+The inventory is the render root (README.md "The module model"): every
+command resolves ``--inventory`` to a document, loads its whole import
+closure, and (for commands that need it) flattens that closure once. Domain
+defaults (input directories, outputs, validators) come from that closure;
+the CLI flags below override them per invocation.
 
 Output discipline (README.md): rendered output goes to STDOUT only for
 ``--stdout``; ALL diagnostics (warnings, errors, progress) go to STDERR.
@@ -16,21 +18,22 @@ from __future__ import annotations
 
 import sys
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
 import click
 
-from . import config as config_mod
 from . import inventory as inventory_mod
+from . import modules as modules_mod
 from . import pointer as pointer_mod
 from . import render as render_mod
 from . import validation as validation_mod
 from . import yamlio
-from .config import DEFAULT_CONFIG_PATH
-from .errors import ConfigError, YamlFragError
+from .errors import ModuleError, YamlFragError
 from .exit_codes import ExitCode
-from .models import OutputSpec, ProjectConfig, ProvenanceEntry, RenderedOutput, Variables, YamlValue
+from .models import OutputSpec, Project, ProvenanceEntry, Ref, RenderedOutput, Variables, YamlValue
+from .modules import Closure, Document
 
 
 def _parse_var(ctx: click.Context, param: click.Parameter, values: tuple[str, ...]) -> dict[str, str]:
@@ -51,16 +54,74 @@ def _parse_var(ctx: click.Context, param: click.Parameter, values: tuple[str, ..
     return result
 
 
-def _resolve_inputs(
-    config: ProjectConfig,
+def _parse_fragments_dir(
+    ctx: click.Context, param: click.Parameter, values: tuple[str, ...]
+) -> tuple[Path | None, dict[str, Path]]:
+    """Parse ``--fragments-dir``, which takes one of two forms (never mixed):
+    a single bare ``DIR`` overriding the root document's fragments directory,
+    or one or more repeatable ``NS=DIR`` overriding module ``NS``'s. See
+    README.md "The module model"."""
+    if not values:
+        return None, {}
+    qualified = ["=" in value for value in values]
+    if any(qualified) and not all(qualified):
+        raise click.BadParameter(
+            "cannot mix a bare DIR with NS=DIR forms", ctx=ctx, param=param
+        )
+    if not any(qualified):
+        if len(values) > 1:
+            raise click.BadParameter(
+                "a bare --fragments-dir may only be given once", ctx=ctx, param=param
+            )
+        return Path(values[0]), {}
+    overrides: dict[str, Path] = {}
+    for value in values:
+        name, _, directory = value.partition("=")
+        overrides[name] = Path(directory)
+    return None, overrides
+
+
+def _apply_fragments_dir_overrides(
+    closure: Closure, root_override: Path | None, module_overrides: dict[str, Path]
+) -> Closure:
+    """Apply ``--fragments-dir`` overrides to a loaded closure.
+
+    A bare override replaces the root document's fragments directory;
+    ``NS=DIR`` replaces module ``NS``'s — it overrides an already-imported
+    module, it does not declare one, so an unknown ``NS`` is an error.
+    """
+    if root_override is None and not module_overrides:
+        return closure
+
+    unknown = set(module_overrides) - set(closure.by_name)
+    if unknown:
+        raise ModuleError(
+            f"--fragments-dir names unknown module(s): {sorted(unknown)}"
+        )
+
+    documents: list[Document] = []
+    for doc in closure.documents:
+        if doc.is_root and root_override is not None:
+            doc = replace(doc, fragments_dir=root_override.resolve())
+        elif doc.name in module_overrides:
+            doc = replace(doc, fragments_dir=module_overrides[doc.name].resolve())
+        documents.append(doc)
+
+    by_name = {doc.name: doc for doc in documents if doc.name is not None}
+    return Closure(documents=tuple(documents), by_name=by_name)
+
+
+def _load_closure(
     inventory_path: Path | None,
-    fragments_dir: Path | None,
-) -> tuple[Path, Path]:
-    """Apply CLI overrides over the project-config defaults for inventory
-    and fragments-dir locations (README.md "CLI usage")."""
-    resolved_inventory = inventory_path if inventory_path is not None else Path(config.inventory)
-    resolved_fragments = fragments_dir if fragments_dir is not None else Path(config.fragments_dir)
-    return resolved_inventory, resolved_fragments
+    fragments_dir_override: tuple[Path | None, dict[str, Path]],
+) -> Closure:
+    """Resolve ``--inventory`` to a document, load its import closure, and
+    apply any ``--fragments-dir`` override. See README.md "The module
+    model"."""
+    root_path = modules_mod.resolve_inventory_path(inventory_path)
+    closure = modules_mod.load_closure(root_path)
+    root_override, module_overrides = fragments_dir_override
+    return _apply_fragments_dir_overrides(closure, root_override, module_overrides)
 
 
 def _emit_overrides(output_name: str, overrides: tuple[str, ...], *, quiet: bool) -> None:
@@ -71,38 +132,38 @@ def _emit_overrides(output_name: str, overrides: tuple[str, ...], *, quiet: bool
 
 
 def _run_selected_validators(
-    config: ProjectConfig,
+    project: Project,
     output: OutputSpec,
     output_path: Path,
     requested: tuple[str, ...],
 ) -> None:
-    for name in config_mod.select_validators(config, output, requested):
-        spec = config.validators[name]
+    for name in render_mod.select_validators(project, output, requested):
+        spec = project.validators[name]
         validation_mod.run_validator(output_path, spec.command)
 
 
-def _check_only_output(config: ProjectConfig, only: str | None) -> None:
-    """Raise :class:`ConfigError` if ``--only`` names an output the project
-    configuration doesn't declare."""
-    if only is not None and only not in config.outputs:
-        raise ConfigError(f"unknown output {only!r} requested")
+def _check_only_output(project: Project, only: str | None) -> None:
+    """Raise :class:`ModuleError` if ``--only`` names an output the closure
+    doesn't declare."""
+    if only is not None and only not in project.outputs:
+        raise ModuleError(f"unknown output {only!r} requested")
 
 
 def _check_only_not_aggregate_for_single_target(
-    config: ProjectConfig, only: str | None, *, instead: str
+    project: Project, only: str | None, *, instead: str
 ) -> None:
     """For a single-target command (``render``/``validate``/``explain`` WITH
     a TARGET), ``--only`` naming an aggregate-scoped output is a config
     error — an aggregate output is not a function of one target (README.md
     "CLI usage"/"Aggregate outputs"). Assumes ``only`` has already been
-    checked against ``config.outputs`` by :func:`_check_only_output`.
+    checked against ``project.outputs`` by :func:`_check_only_output`.
 
     ``instead`` is the command form to point the user at, so each command
     suggests its own remedy (``render-all`` for ``render``, ``explain``
     without a TARGET for ``explain``) rather than a one-size-fits-all hint.
     """
-    if only is not None and config.outputs[only].scope == "aggregate":
-        raise ConfigError(
+    if only is not None and project.outputs[only].scope == "aggregate":
+        raise ModuleError(
             f"output {only!r} has scope `aggregate`; use `{instead}`"
         )
 
@@ -151,7 +212,7 @@ def _select_output_names(
 ) -> list[str]:
     """Which output names a command should act on.
 
-    ``only`` (already validated against ``config.outputs`` by
+    ``only`` (already validated against ``project.outputs`` by
     :func:`_check_only_output`) restricts to a single output, which must be one
     the target actually produced. With no ``--only``, act on every output the
     target produced.
@@ -159,12 +220,12 @@ def _select_output_names(
     if only is None:
         return list(produced)
     if only not in produced:
-        raise ConfigError(f"{target!r} does not produce output {only!r}")
+        raise ModuleError(f"{target!r} does not produce output {only!r}")
     return [only]
 
 
 def _select_single_output(
-    config: ProjectConfig,
+    project: Project,
     produced: dict[str, RenderedOutput],
     only: str | None,
     target: str,
@@ -176,9 +237,9 @@ def _select_single_output(
 
     ``only`` takes precedence. Otherwise, a target that produced exactly one
     output is unambiguous. With more than one produced output and no
-    ``--only``: fall back to ``config.default_output`` when ``use_default`` is
+    ``--only``: fall back to ``project.default_output`` when ``use_default`` is
     set (used by ``--stdout``); otherwise (``--output PATH``) require
-    ``--only`` explicitly. Raise :class:`ConfigError` naming the available
+    ``--only`` explicitly. Raise :class:`ModuleError` naming the available
     outputs when none of the above resolves it.
 
     ``produced`` may be EMPTY: aggregate-scoped outputs are excluded from
@@ -191,51 +252,47 @@ def _select_single_output(
     if only is not None:
         return only
     if not produced:
-        raise ConfigError(
+        raise ModuleError(
             f"{target!r} produces no per-target outputs; its inventory routing "
             f"only feeds aggregate output(s), which are rendered for the whole "
             f"run — use `render-all`/`validate-all` (optionally with --only NAME)"
         )
     if len(produced) == 1:
         return next(iter(produced))
-    if use_default and config.default_output is not None and config.default_output in produced:
-        return config.default_output
+    if use_default and project.default_output is not None and project.default_output in produced:
+        return project.default_output
     available = ", ".join(sorted(produced))
     hint = " (or mark one output `default: true`)" if use_default else ""
-    raise ConfigError(
+    raise ModuleError(
         f"{target!r} produces multiple outputs ({available}); specify --only NAME{hint}"
     )
 
 
 # Shared option decorators. Path defaults are None so the resolved value comes
-# from the project config unless the flag is given.
-_config_option = click.option(
-    "--config",
-    "config_path",
-    type=click.Path(path_type=Path),
-    default=DEFAULT_CONFIG_PATH,
-    show_default=True,
-    help="Project configuration file.",
-)
+# from the closure unless the flag is given.
 _inventory_option = click.option(
     "--inventory",
     "inventory_path",
     type=click.Path(path_type=Path),
     default=None,
-    help="Inventory YAML file (overrides project config).",
+    help="Inventory file or directory (a directory resolves to DIR/targets.yaml). Defaults to '.'.",
 )
 _fragments_option = click.option(
     "--fragments-dir",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="Directory containing fragment files (overrides project config).",
+    "fragments_dir_override",
+    multiple=True,
+    metavar="[NS=]DIR",
+    callback=_parse_fragments_dir,
+    help="Override a fragments directory: a bare DIR overrides the root's; "
+    "repeatable NS=DIR overrides module NS's. The two forms cannot be mixed.",
 )
 _secrets_option = click.option(
     "--secrets",
     "secrets_path",
     type=click.Path(path_type=Path),
     default=None,
-    help="Optional untracked secrets overlay file.",
+    help="Untracked secrets overlay file. Defaults to the inventory's "
+    "sibling secrets.yaml when that exists.",
 )
 _var_option = click.option(
     "--var",
@@ -250,7 +307,7 @@ _validator_option = click.option(
     "validators",
     multiple=True,
     metavar="NAME",
-    help="Run a named validator from the project config. May be repeated. "
+    help="Run a named validator from the closure. May be repeated. "
     "If omitted, the output's default validators run.",
 )
 _only_option = click.option(
@@ -258,7 +315,7 @@ _only_option = click.option(
     "only_output",
     default=None,
     metavar="NAME",
-    help="Scope to a single named output (see project config `outputs`).",
+    help="Scope to a single named output (see the closure's `outputs`).",
 )
 
 
@@ -270,7 +327,6 @@ def cli() -> None:
 
 @cli.command()
 @click.argument("target")
-@_config_option
 @_inventory_option
 @_fragments_option
 @_secrets_option
@@ -284,9 +340,8 @@ def cli() -> None:
 @click.option("--no-validate", "validate", is_flag=True, default=True, flag_value=False, help="Skip generic validation and validators.")
 def render(
     target: str,
-    config_path: Path,
     inventory_path: Path | None,
-    fragments_dir: Path | None,
+    fragments_dir_override: tuple[Path | None, dict[str, Path]],
     secrets_path: Path | None,
     cli_variables: dict[str, str],
     validators: tuple[str, ...],
@@ -303,35 +358,31 @@ def render(
     skipped — they're not a function of one target. ``--only`` naming one is
     a config error pointing at ``render-all --only NAME`` instead.
     """
-    cfg = config_mod.load_config(config_path)
-    inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
-    _check_only_output(cfg, only_output)
-    _check_only_not_aggregate_for_single_target(
-        cfg, only_output, instead=f"render-all --only {only_output}"
-    )
-
-    result = render_mod.render_target(
-        target,
-        config=cfg,
-        inventory_path=inv_path,
-        fragments_dir=frags_dir,
+    closure = _load_closure(inventory_path, fragments_dir_override)
+    session = render_mod.RenderSession(
+        closure,
         cli_variables=cast(Variables, cli_variables),
         secrets_path=secrets_path,
-        validate=validate,
+    )
+    _check_only_output(session.project, only_output)
+    _check_only_not_aggregate_for_single_target(
+        session.project, only_output, instead=f"render-all --only {only_output}"
     )
 
+    result = session.render_target_outputs(target, validate=validate)
+
     if to_stdout:
-        name = _select_single_output(cfg, result.outputs, only_output, target, use_default=True)
+        name = _select_single_output(session.project, result.outputs, only_output, target, use_default=True)
         rendered = result.outputs[name]
         _emit_overrides(name, rendered.overrides, quiet=quiet_overrides)
-        text = render_mod.compose_output(rendered, cfg.outputs[name])
+        text = render_mod.compose_output(rendered, session.project.outputs[name])
         click.echo(text, nl=False)
         return
 
     selected_names = _select_output_names(result.outputs, only_output, target)
     if output_path is not None:
         selected_names = [
-            _select_single_output(cfg, result.outputs, only_output, target, use_default=False)
+            _select_single_output(session.project, result.outputs, only_output, target, use_default=False)
         ]
 
     for name in selected_names:
@@ -342,18 +393,16 @@ def render(
 
     for name in selected_names:
         rendered = result.outputs[name]
-        output_spec = cfg.outputs[name]
+        output_spec = session.project.outputs[name]
         text = render_mod.compose_output(rendered, output_spec)
-        out_path = config_mod.resolve_output_path(output_spec, target, override=output_path)
+        out_path = render_mod.resolve_output_path(output_spec, target, override=output_path)
         render_mod.write_output(text, out_path)
 
         if validate:
-            _run_selected_validators(cfg, output_spec, out_path, validators)
+            _run_selected_validators(session.project, output_spec, out_path, validators)
 
 
-def _select_run_scope(
-    config: ProjectConfig, only: str | None
-) -> tuple[bool, list[str]]:
+def _select_run_scope(project: Project, only: str | None) -> tuple[bool, list[str]]:
     """Decide, for `render-all`/`validate-all`, which per-target outputs to
     render and which aggregate outputs to compose for the whole run.
 
@@ -368,15 +417,14 @@ def _select_run_scope(
     See README.md "Aggregate outputs" / "CLI usage".
     """
     if only is None:
-        aggregate_names = [name for name, spec in config.outputs.items() if spec.scope == "aggregate"]
+        aggregate_names = [name for name, spec in project.outputs.items() if spec.scope == "aggregate"]
         return True, aggregate_names
-    if config.outputs[only].scope == "aggregate":
+    if project.outputs[only].scope == "aggregate":
         return False, [only]
     return True, []
 
 
 @cli.command("render-all")
-@_config_option
 @_inventory_option
 @_fragments_option
 @_secrets_option
@@ -398,9 +446,8 @@ def _select_run_scope(
 @click.option("--quiet-overrides", is_flag=True)
 @click.option("--no-validate", "validate", is_flag=True, default=True, flag_value=False)
 def render_all(
-    config_path: Path,
     inventory_path: Path | None,
-    fragments_dir: Path | None,
+    fragments_dir_override: tuple[Path | None, dict[str, Path]],
     secrets_path: Path | None,
     validators: tuple[str, ...],
     only_output: str | None,
@@ -420,25 +467,22 @@ def render_all(
     iteration loop for authoring an aggregate output without re-rendering
     every target-scoped output too.
     """
-    cfg = config_mod.load_config(config_path)
-    inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
-    _check_only_output(cfg, only_output)
-    render_per_target, aggregate_names = _select_run_scope(cfg, only_output)
+    closure = _load_closure(inventory_path, fragments_dir_override)
+    session = render_mod.RenderSession(closure, secrets_path=secrets_path)
+    project = session.project
+    _check_only_output(project, only_output)
+    render_per_target, aggregate_names = _select_run_scope(project, only_output)
 
     if (output_path is not None or to_stdout) and (
-        only_output is None or cfg.outputs[only_output].scope != "aggregate"
+        only_output is None or project.outputs[only_output].scope != "aggregate"
     ):
-        raise ConfigError(
+        raise ModuleError(
             "--output/--stdout on render-all require --only naming an aggregate output"
         )
 
-    session = render_mod.RenderSession(
-        cfg, inv_path, frags_dir, secrets_path=secrets_path
-    )
-
     failed: list[str] = []
     if render_per_target:
-        for target_name in session.inventory.targets:
+        for target_name in project.targets:
             try:
                 result = session.render_target_outputs(target_name, validate=validate)
                 names = [only_output] if only_output is not None else list(result.outputs)
@@ -447,12 +491,12 @@ def render_all(
                         continue
                     rendered = result.outputs[name]
                     _emit_overrides(name, rendered.overrides, quiet=quiet_overrides)
-                    output_spec = cfg.outputs[name]
+                    output_spec = project.outputs[name]
                     text = render_mod.compose_output(rendered, output_spec)
-                    out_path = config_mod.resolve_output_path(output_spec, target_name)
+                    out_path = render_mod.resolve_output_path(output_spec, target_name)
                     render_mod.write_output(text, out_path)
                     if validate:
-                        _run_selected_validators(cfg, output_spec, out_path, validators)
+                        _run_selected_validators(project, output_spec, out_path, validators)
             except YamlFragError as exc:
                 click.echo(f"{target_name}: {exc}", err=True)
                 failed.append(target_name)
@@ -471,15 +515,15 @@ def render_all(
                 if aggregate_rendered is None:
                     continue
                 _emit_overrides(name, aggregate_rendered.overrides, quiet=quiet_overrides)
-                output_spec = cfg.outputs[name]
+                output_spec = project.outputs[name]
                 text = render_mod.compose_output(aggregate_rendered, output_spec)
                 if to_stdout:
                     click.echo(text, nl=False)
                     continue
-                out_path = config_mod.resolve_aggregate_output_path(output_spec, override=output_path)
+                out_path = render_mod.resolve_aggregate_output_path(output_spec, override=output_path)
                 render_mod.write_output(text, out_path)
                 if validate:
-                    _run_selected_validators(cfg, output_spec, out_path, validators)
+                    _run_selected_validators(project, output_spec, out_path, validators)
 
     if failed:
         raise YamlFragError(
@@ -489,7 +533,6 @@ def render_all(
 
 @cli.command()
 @click.argument("target")
-@_config_option
 @_inventory_option
 @_fragments_option
 @_secrets_option
@@ -498,9 +541,8 @@ def render_all(
 @_only_option
 def validate(
     target: str,
-    config_path: Path,
     inventory_path: Path | None,
-    fragments_dir: Path | None,
+    fragments_dir_override: tuple[Path | None, dict[str, Path]],
     secrets_path: Path | None,
     cli_variables: dict[str, str],
     validators: tuple[str, ...],
@@ -512,64 +554,59 @@ def validate(
     Aggregate-scoped outputs are silently skipped, same as ``render``; use
     ``validate-all --only NAME`` for one instead.
     """
-    cfg = config_mod.load_config(config_path)
-    inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
-    _check_only_output(cfg, only_output)
-    _check_only_not_aggregate_for_single_target(
-        cfg, only_output, instead=f"validate-all --only {only_output}"
-    )
-
-    result = render_mod.render_target(
-        target,
-        config=cfg,
-        inventory_path=inv_path,
-        fragments_dir=frags_dir,
+    closure = _load_closure(inventory_path, fragments_dir_override)
+    session = render_mod.RenderSession(
+        closure,
         cli_variables=cast(Variables, cli_variables),
         secrets_path=secrets_path,
-        validate=True,
     )
+    project = session.project
+    _check_only_output(project, only_output)
+    _check_only_not_aggregate_for_single_target(
+        project, only_output, instead=f"validate-all --only {only_output}"
+    )
+
+    result = session.render_target_outputs(target, validate=True)
 
     for name in _select_output_names(result.outputs, only_output, target):
         rendered = result.outputs[name]
-        output_spec = cfg.outputs[name]
+        output_spec = project.outputs[name]
         text = render_mod.compose_output(rendered, output_spec)
 
-        selected = config_mod.select_validators(cfg, output_spec, validators)
+        selected = render_mod.select_validators(project, output_spec, validators)
         if selected:
             with tempfile.TemporaryDirectory() as tmp_dir:
                 tmp_path = Path(tmp_dir) / "output"
                 render_mod.write_output(text, tmp_path)
                 for validator_name in selected:
-                    spec = cfg.validators[validator_name]
+                    spec = project.validators[validator_name]
                     validation_mod.run_validator(tmp_path, spec.command)
 
 
 def _validate_rendered(
-    config: ProjectConfig, name: str, rendered: RenderedOutput, requested: tuple[str, ...]
+    project: Project, name: str, rendered: RenderedOutput, requested: tuple[str, ...]
 ) -> None:
-    output_spec = config.outputs[name]
+    output_spec = project.outputs[name]
     text = render_mod.compose_output(rendered, output_spec)
-    selected = config_mod.select_validators(config, output_spec, requested)
+    selected = render_mod.select_validators(project, output_spec, requested)
     if selected:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir) / "output"
             render_mod.write_output(text, tmp_path)
             for validator_name in selected:
-                spec = config.validators[validator_name]
+                spec = project.validators[validator_name]
                 validation_mod.run_validator(tmp_path, spec.command)
 
 
 @cli.command("validate-all")
-@_config_option
 @_inventory_option
 @_fragments_option
 @_secrets_option
 @_validator_option
 @_only_option
 def validate_all(
-    config_path: Path,
     inventory_path: Path | None,
-    fragments_dir: Path | None,
+    fragments_dir_override: tuple[Path | None, dict[str, Path]],
     secrets_path: Path | None,
     validators: tuple[str, ...],
     only_output: str | None,
@@ -581,25 +618,22 @@ def validate_all(
     skipped entirely (README.md "Aggregate outputs"). ``--only NAME`` scopes
     the run to a single output, of either scope.
     """
-    cfg = config_mod.load_config(config_path)
-    inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
-    _check_only_output(cfg, only_output)
-    render_per_target, aggregate_names = _select_run_scope(cfg, only_output)
-
-    session = render_mod.RenderSession(
-        cfg, inv_path, frags_dir, secrets_path=secrets_path
-    )
+    closure = _load_closure(inventory_path, fragments_dir_override)
+    session = render_mod.RenderSession(closure, secrets_path=secrets_path)
+    project = session.project
+    _check_only_output(project, only_output)
+    render_per_target, aggregate_names = _select_run_scope(project, only_output)
 
     failed: list[str] = []
     if render_per_target:
-        for target_name in session.inventory.targets:
+        for target_name in project.targets:
             try:
                 result = session.render_target_outputs(target_name, validate=True)
                 names = [only_output] if only_output is not None else list(result.outputs)
                 for name in names:
                     if name not in result.outputs:
                         continue
-                    _validate_rendered(cfg, name, result.outputs[name], validators)
+                    _validate_rendered(project, name, result.outputs[name], validators)
             except YamlFragError as exc:
                 click.echo(f"{target_name}: {exc}", err=True)
                 failed.append(target_name)
@@ -617,7 +651,7 @@ def validate_all(
                 rendered = session.render_aggregate(name, validate=True)
                 if rendered is None:
                     continue
-                _validate_rendered(cfg, name, rendered, validators)
+                _validate_rendered(project, name, rendered, validators)
 
     if failed:
         raise YamlFragError(
@@ -627,8 +661,7 @@ def validate_all(
 
 @cli.command()
 @click.argument("target", required=False)
-@click.argument("path", required=False)
-@_config_option
+@click.option("--path", "path", default=None, metavar="POINTER", help="Scope provenance to one JSON Pointer path and its descendants.")
 @_inventory_option
 @_fragments_option
 @_secrets_option
@@ -637,64 +670,55 @@ def validate_all(
 def explain(
     target: str | None,
     path: str | None,
-    config_path: Path,
     inventory_path: Path | None,
-    fragments_dir: Path | None,
+    fragments_dir_override: tuple[Path | None, dict[str, Path]],
     secrets_path: Path | None,
     cli_variables: dict[str, str],
     only_output: str | None,
 ) -> None:
-    """Show provenance for TARGET, optionally scoped to a single PATH.
+    """Show provenance for TARGET, optionally scoped to a single --path.
 
     Prints one section per output the target produces (headed by the output
     name); use ``--only`` to scope to a single output. TARGET may be omitted
     only when ``--only`` names an aggregate-scoped output (README.md
-    "Aggregate outputs") — in that case PATH is not accepted (there's no
-    target to disambiguate it from). Naming an aggregate output together
-    with a TARGET is the same config error as ``render TARGET --only
-    <aggregate>``. See README.md "Provenance and `explain`" for the expected
-    output format.
+    "Aggregate outputs") — naming TARGET together with an aggregate
+    ``--only`` is the same config error as ``render TARGET --only
+    <aggregate>``. ``--path`` is a flag, independent of TARGET: it is
+    accepted, and scopes provenance the same way, whether or not TARGET is
+    given — including in the TARGET-less aggregate case, where it scopes the
+    composed aggregate document's provenance. See README.md "Provenance and
+    `explain`" for the expected output format.
     """
-    cfg = config_mod.load_config(config_path)
-    inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
-    _check_only_output(cfg, only_output)
+    closure = _load_closure(inventory_path, fragments_dir_override)
+    session = render_mod.RenderSession(
+        closure,
+        cli_variables=cast(Variables, cli_variables),
+        secrets_path=secrets_path,
+        redact_sources=True,
+    )
+    project = session.project
+    _check_only_output(project, only_output)
 
     if target is None:
-        if only_output is None or cfg.outputs[only_output].scope != "aggregate":
-            raise ConfigError(
+        if only_output is None or project.outputs[only_output].scope != "aggregate":
+            raise ModuleError(
                 "TARGET is required unless --only names an aggregate output"
             )
-        session = render_mod.RenderSession(
-            cfg,
-            inv_path,
-            frags_dir,
-            secrets_path=secrets_path,
-            redact_sources=True,
-        )
         rendered = session.render_aggregate(only_output, validate=False)
         sections = (
-            [_explain_section(only_output, rendered, path=None)] if rendered is not None else []
+            [_explain_section(only_output, rendered, path=path)] if rendered is not None else []
         )
         click.echo("\n\n".join(sections))
         return
 
     _check_only_not_aggregate_for_single_target(
-        cfg, only_output, instead=f"explain --only {only_output} (without a TARGET)"
+        project, only_output, instead=f"explain --only {only_output} (without a TARGET)"
     )
 
     # Redact sources so explain never executes captures or reveals secrets
     # (README.md "Resolution timing"); secret/capture-derived values appear as
     # non-executing placeholders in the provenance output.
-    result = render_mod.render_target(
-        target,
-        config=cfg,
-        inventory_path=inv_path,
-        fragments_dir=frags_dir,
-        cli_variables=cast(Variables, cli_variables),
-        secrets_path=secrets_path,
-        validate=False,
-        redact_sources=True,
-    )
+    result = session.render_target_outputs(target, validate=False)
 
     sections = [
         _explain_section(name, result.outputs[name], path=path)
@@ -703,46 +727,81 @@ def explain(
     click.echo("\n\n".join(sections))
 
 
-@cli.command("list")
-@click.argument("kind", type=click.Choice(["targets", "fragments", "groups", "outputs"]))
-@_config_option
+@cli.group("list")
+def list_group() -> None:
+    """List targets, fragments, groups, outputs, or modules."""
+
+
+@list_group.command("targets")
 @_inventory_option
 @_fragments_option
-def list_(kind: str, config_path: Path, inventory_path: Path | None, fragments_dir: Path | None) -> None:
-    """List ``targets``, ``fragments``, ``groups``, or ``outputs``."""
-    cfg = config_mod.load_config(config_path)
-    inv_path, frags_dir = _resolve_inputs(cfg, inventory_path, fragments_dir)
+def list_targets(inventory_path: Path | None, fragments_dir_override: tuple[Path | None, dict[str, Path]]) -> None:
+    """List every target name, in inventory declaration order."""
+    closure = _load_closure(inventory_path, fragments_dir_override)
+    for name in closure.root.targets:
+        click.echo(name)
 
-    if kind == "outputs":
-        # Cheap discoverability for a config that now has two kinds of
-        # output (README.md "Aggregate outputs").
-        for name, spec in cfg.outputs.items():
-            click.echo(f"{name}\t{spec.scope}")
-        return
 
-    if kind == "fragments":
-        if not frags_dir.is_dir():
-            raise ConfigError(f"fragments directory not found: {frags_dir}")
+@list_group.command("groups")
+@_inventory_option
+@_fragments_option
+def list_groups(inventory_path: Path | None, fragments_dir_override: tuple[Path | None, dict[str, Path]]) -> None:
+    """List every group name defined anywhere in the closure."""
+    closure = _load_closure(inventory_path, fragments_dir_override)
+    project = modules_mod.flatten(closure)
+    for name in project.groups:
+        click.echo(name)
+
+
+@list_group.command("outputs")
+@_inventory_option
+@_fragments_option
+def list_outputs(inventory_path: Path | None, fragments_dir_override: tuple[Path | None, dict[str, Path]]) -> None:
+    """List every output name, its scope, and the document that defines it."""
+    closure = _load_closure(inventory_path, fragments_dir_override)
+    project = modules_mod.flatten(closure)
+    for name, spec in project.outputs.items():
+        defining = next(doc for doc in closure.documents if name in doc.outputs)
+        defined_by = "inventory" if defining.is_root else cast(str, defining.name)
+        click.echo(f"{name}\t{spec.scope}\t{defined_by}")
+
+
+@list_group.command("modules")
+@_inventory_option
+@_fragments_option
+def list_modules(inventory_path: Path | None, fragments_dir_override: tuple[Path | None, dict[str, Path]]) -> None:
+    """List every module in the closure — name, path, and its first importer."""
+    closure = _load_closure(inventory_path, fragments_dir_override)
+    for doc in closure.documents:
+        if doc.is_root:
+            continue
+        importer = next(
+            (candidate for candidate in closure.documents if doc.root in candidate.imports.values()),
+            None,
+        )
+        importer_label = "inventory" if importer is None or importer.is_root else cast(str, importer.name)
+        click.echo(f"{doc.name}\t{doc.root}\t{importer_label}")
+
+
+@list_group.command("fragments")
+@_inventory_option
+@_fragments_option
+def list_fragments(inventory_path: Path | None, fragments_dir_override: tuple[Path | None, dict[str, Path]]) -> None:
+    """List every fragment reference in the closure, by document, qualified."""
+    closure = _load_closure(inventory_path, fragments_dir_override)
+    for doc in closure.documents:
+        if doc.fragments_dir is None:
+            continue
         names = sorted(
-            str(p.relative_to(frags_dir).with_suffix("")).replace("\\", "/")
-            for p in frags_dir.rglob("*.yaml")
+            str(p.relative_to(doc.fragments_dir).with_suffix("")).replace("\\", "/")
+            for p in doc.fragments_dir.rglob("*.yaml")
         )
         for name in names:
-            click.echo(name)
-        return
-
-    inv = inventory_mod.load_inventory(inv_path)
-    if kind == "targets":
-        for name in inv.targets:
-            click.echo(name)
-    elif kind == "groups":
-        for name in inv.groups:
-            click.echo(name)
+            click.echo(modules_mod.display_ref(Ref(module=doc.name, path=name)))
 
 
 @cli.command()
 @click.argument("target")
-@_config_option
 @_inventory_option
 @_fragments_option
 @_secrets_option
@@ -750,24 +809,20 @@ def list_(kind: str, config_path: Path, inventory_path: Path | None, fragments_d
 @click.option("--show-secrets", is_flag=True, help="Do not redact secret-looking values (unsafe).")
 def inspect(
     target: str,
-    config_path: Path,
     inventory_path: Path | None,
-    fragments_dir: Path | None,
+    fragments_dir_override: tuple[Path | None, dict[str, Path]],
     secrets_path: Path | None,
     cli_variables: dict[str, str],
     show_secrets: bool,
 ) -> None:
-    """Show resolved groups, per-output fragment order, and (redacted)
-    variables.
+    """Show resolved groups, per-output fragment order (qualified refs), and
+    (redacted) variables.
 
     See README.md "CLI usage".
     """
-    cfg = config_mod.load_config(config_path)
-    # `inspect` reports resolved inventory data only; it never loads fragments,
-    # so the resolved fragments directory is deliberately unused here.
-    inv_path, _ = _resolve_inputs(cfg, inventory_path, fragments_dir)
-    inv = inventory_mod.load_inventory(inv_path)
-    resolved = inventory_mod.resolve_target(inv, target, cli_variables=cast(Variables, cli_variables))
+    closure = _load_closure(inventory_path, fragments_dir_override)
+    project = modules_mod.flatten(closure)
+    resolved = inventory_mod.resolve_target(project, target, cli_variables=cast(Variables, cli_variables))
 
     redacted_variables: Variables = render_mod.redact_variables(
         resolved.variables, show_secrets=show_secrets
@@ -778,7 +833,7 @@ def inspect(
         "outputs": cast(
             YamlValue,
             {
-                name: {"fragments": list(fragments)}
+                name: {"fragments": [modules_mod.display_ref(ref) for ref in fragments]}
                 for name, fragments in resolved.output_fragments.items()
             },
         ),

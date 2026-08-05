@@ -1,0 +1,29 @@
+# A reusable module that composes a single Ansible inventory document across
+# every target that contributes to it. See README.md "The module model" and
+# "Aggregate outputs".
+version: 1
+
+outputs:
+  ansible-inventory:
+    # One file for the whole run, not one per target.
+    scope: aggregate
+    path: "rendered/inventory.yaml"
+    # Whole-document validation for the composed inventory — aggregate scope
+    # can't rely on a trailing assertion fragment (see README.md "Aggregate
+    # outputs").
+    schema: ansible-inventory.schema.json
+
+defaults:
+  outputs:
+    # Every importer's targets opt into this output at once.
+    ansible-inventory:
+      fragments:
+        - ansible/host
+
+groups:
+  gb10:
+    variables:
+      ansible_group: gb10
+  generic_vm:
+    variables:
+      ansible_group: generic_vm

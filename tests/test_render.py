@@ -13,35 +13,21 @@ from pathlib import Path
 
 import pytest
 
-from yaml_frag import config as config_mod
 from yaml_frag import render as render_mod
-from yaml_frag.errors import AssertionFailedError, ConfigError, ValidationError
-from yaml_frag.models import OutputSpec, ProjectConfig
+from yaml_frag.errors import AssertionFailedError, ModuleError, ValidationError
+from yaml_frag.models import OutputSpec
 
 SNAPSHOT_TARGETS = ["generic-vm-01", "gb10-01", "gb10-02"]
 
 
-def _render(
-    target: str,
-    *,
-    config_path: Path,
-    inventory_path: Path,
-    fragments_dir: Path,
-    secrets_example_path: Path,
-    stub_runner,
-    validate: bool = True,
-):
-    cfg = config_mod.load_config(config_path)
-    result = render_mod.render_target(
-        target,
-        config=cfg,
-        inventory_path=inventory_path,
-        fragments_dir=fragments_dir,
+def _render(target: str, *, example_closure, secrets_example_path: Path, stub_runner, validate: bool = True):
+    session = render_mod.RenderSession(
+        example_closure,
         secrets_path=secrets_example_path,
         runner=stub_runner,
-        validate=validate,
     )
-    return cfg, result
+    result = session.render_target_outputs(target, validate=validate)
+    return session, result
 
 
 @pytest.mark.parametrize("target", SNAPSHOT_TARGETS)
@@ -49,47 +35,31 @@ def _render(
 def test_snapshot_matches_expected(
     target: str,
     output_name: str,
-    config_path: Path,
-    inventory_path: Path,
-    fragments_dir: Path,
+    example_closure,
     secrets_example_path: Path,
     fixtures_dir: Path,
     stub_runner,
 ) -> None:
     """Rendered output equals the committed expected fixture, byte for byte."""
-    cfg, result = _render(
-        target,
-        config_path=config_path,
-        inventory_path=inventory_path,
-        fragments_dir=fragments_dir,
-        secrets_example_path=secrets_example_path,
-        stub_runner=stub_runner,
+    session, result = _render(
+        target, example_closure=example_closure, secrets_example_path=secrets_example_path, stub_runner=stub_runner
     )
-    text = render_mod.compose_output(result.outputs[output_name], cfg.outputs[output_name])
+    text = render_mod.compose_output(result.outputs[output_name], session.project.outputs[output_name])
     expected_path = fixtures_dir / "expected" / target / output_name
     expected = expected_path.read_bytes()
     assert text.encode("utf-8") == expected
 
 
 def test_gb10_matches_readme_expected_render(
-    config_path: Path,
-    inventory_path: Path,
-    fragments_dir: Path,
-    secrets_example_path: Path,
-    stub_runner,
+    example_closure, secrets_example_path: Path, stub_runner
 ) -> None:
     """gb10-01 renders the expected YAML shown in README.md's "Example project:
     Ubuntu autoinstall" section, using a stubbed CommandRunner for the
     capture-derived password hash."""
-    cfg, result = _render(
-        "gb10-01",
-        config_path=config_path,
-        inventory_path=inventory_path,
-        fragments_dir=fragments_dir,
-        secrets_example_path=secrets_example_path,
-        stub_runner=stub_runner,
+    session, result = _render(
+        "gb10-01", example_closure=example_closure, secrets_example_path=secrets_example_path, stub_runner=stub_runner
     )
-    text = render_mod.compose_output(result.outputs["user-data"], cfg.outputs["user-data"])
+    text = render_mod.compose_output(result.outputs["user-data"], session.project.outputs["user-data"])
 
     assert text.startswith("#cloud-config\n")
     doc = result.outputs["user-data"].document
@@ -147,57 +117,34 @@ def test_gb10_matches_readme_expected_render(
 
 
 def test_output_template_prepends_cloud_config_header(
-    config_path: Path,
-    inventory_path: Path,
-    fragments_dir: Path,
-    secrets_example_path: Path,
-    stub_runner,
+    example_closure, secrets_example_path: Path, stub_runner
 ) -> None:
-    """The project output template wraps the YAML with a `#cloud-config` header."""
-    cfg, result = _render(
-        "gb10-01",
-        config_path=config_path,
-        inventory_path=inventory_path,
-        fragments_dir=fragments_dir,
-        secrets_example_path=secrets_example_path,
-        stub_runner=stub_runner,
+    """The output template wraps the YAML with a `#cloud-config` header."""
+    session, result = _render(
+        "gb10-01", example_closure=example_closure, secrets_example_path=secrets_example_path, stub_runner=stub_runner
     )
     rendered = result.outputs["user-data"]
-    text = render_mod.compose_output(rendered, cfg.outputs["user-data"])
+    text = render_mod.compose_output(rendered, session.project.outputs["user-data"])
     lines = text.splitlines()
     assert lines[0] == "#cloud-config"
     assert lines[1] == "autoinstall:"
 
     # Without a template, the header is absent.
-    no_template_output = OutputSpec(path=cfg.outputs["user-data"].path, template=None)
+    no_template_output = OutputSpec(path=session.project.outputs["user-data"].path, template=None)
     text_no_template = render_mod.compose_output(rendered, no_template_output)
     assert not text_no_template.startswith("#cloud-config")
     assert text_no_template.startswith("autoinstall:")
 
 
 def test_gb10_hosts_differ_only_in_host_variables(
-    config_path: Path,
-    inventory_path: Path,
-    fragments_dir: Path,
-    secrets_example_path: Path,
-    stub_runner,
+    example_closure, secrets_example_path: Path, stub_runner
 ) -> None:
     """gb10-01 and gb10-02 differ only where host variables differ."""
     _, result_1 = _render(
-        "gb10-01",
-        config_path=config_path,
-        inventory_path=inventory_path,
-        fragments_dir=fragments_dir,
-        secrets_example_path=secrets_example_path,
-        stub_runner=stub_runner,
+        "gb10-01", example_closure=example_closure, secrets_example_path=secrets_example_path, stub_runner=stub_runner
     )
     _, result_2 = _render(
-        "gb10-02",
-        config_path=config_path,
-        inventory_path=inventory_path,
-        fragments_dir=fragments_dir,
-        secrets_example_path=secrets_example_path,
-        stub_runner=stub_runner,
+        "gb10-02", example_closure=example_closure, secrets_example_path=secrets_example_path, stub_runner=stub_runner
     )
     doc_1 = dict(result_1.outputs["user-data"].document)
     doc_2 = dict(result_2.outputs["user-data"].document)
@@ -211,18 +158,17 @@ def test_gb10_hosts_differ_only_in_host_variables(
 
 
 def test_fragment_assertion_failure_is_reported(
-    config_path: Path,
-    fragments_dir: Path,
-    secrets_example_path: Path,
-    stub_runner,
-    tmp_path: Path,
+    closure_from_tree, secrets_example_path: Path, stub_runner
 ) -> None:
     """A failed fragment `assert` (e.g. autoinstall/checks) fails the render with
     context. Structural checks are data, not built-in renderer logic."""
-    inventory_path = tmp_path / "targets.yaml"
-    inventory_path.write_text(
-        """
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
 version: 1
+outputs:
+  user-data:
+    path: "rendered/{target}/user-data"
 targets:
   broken:
     outputs:
@@ -230,12 +176,8 @@ targets:
         fragments:
           - failing-assert
     variables: {}
-"""
-    )
-    frag_dir = tmp_path / "frags"
-    frag_dir.mkdir()
-    (frag_dir / "failing-assert.yaml").write_text(
-        """
+""",
+            "fragments/failing-assert.yaml": """
 fragment:
   version: 1
   description: deliberately fails an assertion
@@ -247,27 +189,18 @@ operations:
   - op: assert
     path: /autoinstall/version
     equals: 99
-"""
+""",
+        }
     )
-
-    cfg = config_mod.load_config(config_path)
     with pytest.raises(AssertionFailedError) as excinfo:
         render_mod.render_target(
-            "broken",
-            config=cfg,
-            inventory_path=inventory_path,
-            fragments_dir=frag_dir,
-            secrets_path=secrets_example_path,
-            runner=stub_runner,
+            "broken", closure=closure, secrets_path=secrets_example_path, runner=stub_runner
         )
     assert "/autoinstall/version" in str(excinfo.value)
 
 
 def test_generic_validation_rejects_unresolved_markers(
-    config_path: Path,
-    secrets_example_path: Path,
-    stub_runner,
-    tmp_path: Path,
+    closure_from_tree, secrets_example_path: Path, stub_runner
 ) -> None:
     """Generic validation fails on leftover `{{`/`{%` markers.
 
@@ -276,13 +209,16 @@ def test_generic_validation_rejects_unresolved_markers(
     whole-variable reference), but the resulting document still contains an
     unresolved-looking marker, so generic validation must reject it.
     """
-    inventory_path = tmp_path / "targets.yaml"
-    inventory_path.write_text(
-        """
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
 version: 1
 defaults:
   variables:
     echo_var: "{{ nested }}"
+outputs:
+  user-data:
+    path: "rendered/{target}/user-data"
 targets:
   broken:
     outputs:
@@ -290,12 +226,8 @@ targets:
         fragments:
           - echoes
     variables: {}
-"""
-    )
-    frag_dir = tmp_path / "frags"
-    frag_dir.mkdir()
-    (frag_dir / "echoes.yaml").write_text(
-        """
+""",
+            "fragments/echoes.yaml": """
 fragment:
   version: 1
   description: echoes a variable whose value itself contains template braces
@@ -303,33 +235,27 @@ operations:
   - op: set
     path: /leftover
     value: "{{ echo_var }}"
-"""
+""",
+        }
     )
-
-    cfg = config_mod.load_config(config_path)
     with pytest.raises(ValidationError, match="unresolved template marker"):
         render_mod.render_target(
-            "broken",
-            config=cfg,
-            inventory_path=inventory_path,
-            fragments_dir=frag_dir,
-            secrets_path=secrets_example_path,
-            runner=stub_runner,
+            "broken", closure=closure, secrets_path=secrets_example_path, runner=stub_runner
         )
 
 
 def test_fragment_can_reference_current_target_name(
-    config_path: Path,
-    secrets_example_path: Path,
-    stub_runner,
-    tmp_path: Path,
+    closure_from_tree, secrets_example_path: Path, stub_runner
 ) -> None:
     """A fragment can reference the current target's own name via the
     reserved `{{ target }}` variable."""
-    inventory_path = tmp_path / "targets.yaml"
-    inventory_path.write_text(
-        """
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
 version: 1
+outputs:
+  user-data:
+    path: "rendered/{target}/user-data"
 targets:
   my-target:
     outputs:
@@ -337,12 +263,8 @@ targets:
         fragments:
           - names-itself
     variables: {}
-"""
-    )
-    frag_dir = tmp_path / "frags"
-    frag_dir.mkdir()
-    (frag_dir / "names-itself.yaml").write_text(
-        """
+""",
+            "fragments/names-itself.yaml": """
 fragment:
   version: 1
   description: echoes the reserved target variable
@@ -350,33 +272,29 @@ operations:
   - op: set
     path: /whoami
     value: "{{ target }}"
-"""
+""",
+        }
     )
-
-    cfg = config_mod.load_config(config_path)
     result = render_mod.render_target(
-        "my-target",
-        config=cfg,
-        inventory_path=inventory_path,
-        fragments_dir=frag_dir,
-        secrets_path=secrets_example_path,
-        runner=stub_runner,
+        "my-target", closure=closure, secrets_path=secrets_example_path, runner=stub_runner
     )
     assert result.outputs["user-data"].document["whoami"] == "my-target"
 
 
 def test_fragment_can_reference_current_output_name(
-    config_path: Path,
-    secrets_example_path: Path,
-    stub_runner,
-    tmp_path: Path,
+    closure_from_tree, secrets_example_path: Path, stub_runner
 ) -> None:
     """A fragment shared by two outputs of the same target sees a different
     `{{ output }}` value for each — it's reserved per output, not per target."""
-    inventory_path = tmp_path / "targets.yaml"
-    inventory_path.write_text(
-        """
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
 version: 1
+outputs:
+  user-data:
+    path: "rendered/{target}/user-data"
+  meta-data:
+    path: "rendered/{target}/meta-data"
 defaults:
   outputs:
     user-data:
@@ -388,12 +306,8 @@ defaults:
 targets:
   my-target:
     variables: {}
-"""
-    )
-    frag_dir = tmp_path / "frags"
-    frag_dir.mkdir()
-    (frag_dir / "names-its-output.yaml").write_text(
-        """
+""",
+            "fragments/names-its-output.yaml": """
 fragment:
   version: 1
   description: echoes the reserved output variable
@@ -401,66 +315,35 @@ operations:
   - op: set
     path: /which-output
     value: "{{ output }}"
-"""
+""",
+        }
     )
-
-    cfg = config_mod.load_config(config_path)
     result = render_mod.render_target(
-        "my-target",
-        config=cfg,
-        inventory_path=inventory_path,
-        fragments_dir=frag_dir,
-        secrets_path=secrets_example_path,
-        runner=stub_runner,
+        "my-target", closure=closure, secrets_path=secrets_example_path, runner=stub_runner
     )
     assert result.outputs["user-data"].document["which-output"] == "user-data"
     assert result.outputs["meta-data"].document["which-output"] == "meta-data"
 
 
-def test_deterministic_output(
-    config_path: Path,
-    inventory_path: Path,
-    fragments_dir: Path,
-    secrets_example_path: Path,
-    stub_runner,
-) -> None:
+def test_deterministic_output(example_closure, secrets_example_path: Path, stub_runner) -> None:
     """Rendering the same target twice yields identical bytes."""
-    cfg, result_1 = _render(
-        "gb10-01",
-        config_path=config_path,
-        inventory_path=inventory_path,
-        fragments_dir=fragments_dir,
-        secrets_example_path=secrets_example_path,
-        stub_runner=stub_runner,
+    session, result_1 = _render(
+        "gb10-01", example_closure=example_closure, secrets_example_path=secrets_example_path, stub_runner=stub_runner
     )
     _, result_2 = _render(
-        "gb10-01",
-        config_path=config_path,
-        inventory_path=inventory_path,
-        fragments_dir=fragments_dir,
-        secrets_example_path=secrets_example_path,
-        stub_runner=stub_runner,
+        "gb10-01", example_closure=example_closure, secrets_example_path=secrets_example_path, stub_runner=stub_runner
     )
-    text_1 = render_mod.compose_output(result_1.outputs["user-data"], cfg.outputs["user-data"])
-    text_2 = render_mod.compose_output(result_2.outputs["user-data"], cfg.outputs["user-data"])
+    text_1 = render_mod.compose_output(result_1.outputs["user-data"], session.project.outputs["user-data"])
+    text_2 = render_mod.compose_output(result_2.outputs["user-data"], session.project.outputs["user-data"])
     assert text_1 == text_2
 
 
 def test_render_target_produces_every_declared_output(
-    config_path: Path,
-    inventory_path: Path,
-    fragments_dir: Path,
-    secrets_example_path: Path,
-    stub_runner,
+    example_closure, secrets_example_path: Path, stub_runner
 ) -> None:
     """The example project's targets produce both `user-data` and `meta-data`."""
     _, result = _render(
-        "gb10-01",
-        config_path=config_path,
-        inventory_path=inventory_path,
-        fragments_dir=fragments_dir,
-        secrets_example_path=secrets_example_path,
-        stub_runner=stub_runner,
+        "gb10-01", example_closure=example_closure, secrets_example_path=secrets_example_path, stub_runner=stub_runner
     )
     assert set(result.outputs) == {"user-data", "meta-data"}
     assert result.outputs["meta-data"].document == {
@@ -469,78 +352,55 @@ def test_render_target_produces_every_declared_output(
     }
 
 
-def test_undeclared_output_not_produced(
-    config_path: Path,
-    fragments_dir: Path,
-    secrets_example_path: Path,
-    stub_runner,
-    tmp_path: Path,
-) -> None:
+def test_undeclared_output_not_produced(closure_from_tree, secrets_example_path: Path, stub_runner) -> None:
     """An output no layer contributes fragments to is simply absent from the
     result, not present-but-empty."""
-    inventory_path = tmp_path / "targets.yaml"
-    inventory_path.write_text(
-        """
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
 version: 1
+outputs:
+  user-data:
+    path: "rendered/{target}/user-data"
 targets:
   bare:
     outputs:
       user-data:
         fragments: []
     variables: {}
-"""
+""",
+        }
     )
-    cfg = config_mod.load_config(config_path)
     result = render_mod.render_target(
-        "bare",
-        config=cfg,
-        inventory_path=inventory_path,
-        fragments_dir=fragments_dir,
-        secrets_path=secrets_example_path,
-        runner=stub_runner,
+        "bare", closure=closure, secrets_path=secrets_example_path, runner=stub_runner
     )
     assert result.outputs == {}
 
 
-def test_unknown_output_name_in_inventory_raises_config_error(
-    fragments_dir: Path,
-    secrets_example_path: Path,
-    stub_runner,
-    tmp_path: Path,
+def test_unknown_output_name_in_inventory_raises_module_error(
+    closure_from_tree, secrets_example_path: Path, stub_runner
 ) -> None:
     """A target whose inventory references an output name absent from the
-    project config's `outputs` fails with ConfigError."""
-    inventory_path = tmp_path / "targets.yaml"
-    inventory_path.write_text(
-        """
+    closure fails with ModuleError."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
 version: 1
+outputs:
+  user-data:
+    path: "rendered/{target}/user-data"
 targets:
   t:
     outputs:
       not-declared-anywhere:
-        fragments: [autoinstall/base]
+        fragments: [base]
     variables: {}
-"""
+""",
+        }
     )
-    config_path = tmp_path / "yaml-frag.yaml"
-    config_path.write_text(
-        f"""
-version: 1
-fragments_dir: {fragments_dir}
-outputs:
-  user-data:
-    path: "{tmp_path}/rendered/{{target}}/user-data"
-"""
-    )
-    cfg = config_mod.load_config(config_path)
-    with pytest.raises(ConfigError):
+    with pytest.raises(ModuleError):
         render_mod.render_target(
-            "t",
-            config=cfg,
-            inventory_path=inventory_path,
-            fragments_dir=fragments_dir,
-            secrets_path=secrets_example_path,
-            runner=stub_runner,
+            "t", closure=closure, secrets_path=secrets_example_path, runner=stub_runner
         )
 
 
@@ -625,37 +485,21 @@ def test_write_output_never_leaves_partial_file_on_failure(tmp_path: Path, monke
 # --- Aggregate outputs (README.md "Aggregate outputs") ----------------------
 
 
-def _write_fragment(fragments_dir: Path, ref: str, body: str) -> None:
-    path = fragments_dir / f"{ref}.yaml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(body)
-
-
-def _aggregate_config(*, agg_path: Path, extra_outputs: dict[str, OutputSpec] | None = None) -> ProjectConfig:
-    outputs: dict[str, OutputSpec] = {
-        "combined": OutputSpec(path=str(agg_path), scope="aggregate"),
-    }
-    outputs.update(extra_outputs or {})
-    return ProjectConfig(
-        version=1,
-        inventory="unused",
-        fragments_dir="unused",
-        outputs=outputs,
-        default_output=None,
-    )
-
-
 def test_aggregate_composition_order_is_target_then_fragment_order(
-    tmp_path: Path, stub_runner
+    closure_from_tree, stub_runner
 ) -> None:
     """Aggregate composition visits targets in inventory declaration order
     (never alphabetized) and, within each target, applies that target's
     resolved fragment list in order — the same positional rule as per-target
     rendering, across targets instead of within one."""
-    inventory_path = tmp_path / "targets.yaml"
-    inventory_path.write_text(
-        """
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
 version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
 targets:
   second:
     outputs:
@@ -667,13 +511,8 @@ targets:
       combined:
         fragments: [append-a, append-b]
     variables: {}
-"""
-    )
-    frag_dir = tmp_path / "frags"
-    _write_fragment(
-        frag_dir,
-        "append-a",
-        """
+""",
+            "fragments/append-a.yaml": """
 fragment:
   version: 1
   description: appends "<target>-a"
@@ -682,11 +521,7 @@ operations:
     path: /log
     value: ["{{ target }}-a"]
 """,
-    )
-    _write_fragment(
-        frag_dir,
-        "append-b",
-        """
+            "fragments/append-b.yaml": """
 fragment:
   version: 1
   description: appends "<target>-b"
@@ -695,23 +530,26 @@ operations:
     path: /log
     value: ["{{ target }}-b"]
 """,
+        }
     )
-
-    cfg = _aggregate_config(agg_path=tmp_path / "out.yaml")
-    session = render_mod.RenderSession(cfg, inventory_path, frag_dir, runner=stub_runner)
+    session = render_mod.RenderSession(closure, runner=stub_runner)
     rendered = session.render_aggregate("combined")
     assert rendered is not None
     assert rendered.document["log"] == ["second-a", "second-b", "first-a", "first-b"]
 
 
-def test_aggregate_target_opt_out(tmp_path: Path, stub_runner) -> None:
+def test_aggregate_target_opt_out(closure_from_tree, stub_runner) -> None:
     """A target that contributes no fragments for an aggregate output simply
     doesn't appear in it — that's the opt-out (README.md "Aggregate
     outputs")."""
-    inventory_path = tmp_path / "targets.yaml"
-    inventory_path.write_text(
-        """
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
 version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
 targets:
   contributes:
     outputs:
@@ -720,13 +558,8 @@ targets:
     variables: {}
   opts-out:
     variables: {}
-"""
-    )
-    frag_dir = tmp_path / "frags"
-    _write_fragment(
-        frag_dir,
-        "mark",
-        """
+""",
+            "fragments/mark.yaml": """
 fragment:
   version: 1
   description: marks the contributing target
@@ -735,47 +568,53 @@ operations:
     path: "/seen/{{ target }}"
     value: true
 """,
+        }
     )
-    cfg = _aggregate_config(agg_path=tmp_path / "out.yaml")
-    session = render_mod.RenderSession(cfg, inventory_path, frag_dir, runner=stub_runner)
+    session = render_mod.RenderSession(closure, runner=stub_runner)
     rendered = session.render_aggregate("combined")
     assert rendered is not None
     assert rendered.document == {"seen": {"contributes": True}}
 
 
-def test_aggregate_no_contributors_is_not_produced(tmp_path: Path, stub_runner) -> None:
+def test_aggregate_no_contributors_is_not_produced(closure_from_tree, stub_runner) -> None:
     """If no target contributes to an aggregate output, it's not produced —
     render_aggregate returns None, consistent with "an output no layer
     contributes fragments to is not produced"."""
-    inventory_path = tmp_path / "targets.yaml"
-    inventory_path.write_text(
-        """
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
 version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
 targets:
   t1:
     variables: {}
   t2:
     variables: {}
-"""
+""",
+        }
     )
-    frag_dir = tmp_path / "frags"
-    frag_dir.mkdir()
-    cfg = _aggregate_config(agg_path=tmp_path / "out.yaml")
-    session = render_mod.RenderSession(cfg, inventory_path, frag_dir, runner=stub_runner)
+    session = render_mod.RenderSession(closure, runner=stub_runner)
     assert session.render_aggregate("combined") is None
 
 
 def test_aggregate_cross_target_override_warning_names_both_targets(
-    tmp_path: Path, stub_runner
+    closure_from_tree, stub_runner
 ) -> None:
     """Two targets writing the same path in an aggregate document is exactly
     the "two targets claimed the same key" bug the override warning should
     catch — and for aggregate scope the warning names both contributing
     targets, not just fragment names (README.md "Aggregate outputs")."""
-    inventory_path = tmp_path / "targets.yaml"
-    inventory_path.write_text(
-        """
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
 version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
 targets:
   host-a:
     outputs:
@@ -787,13 +626,8 @@ targets:
       combined:
         fragments: [claim]
     variables: {}
-"""
-    )
-    frag_dir = tmp_path / "frags"
-    _write_fragment(
-        frag_dir,
-        "claim",
-        """
+""",
+            "fragments/claim.yaml": """
 fragment:
   version: 1
   description: both targets claim the same fixed key
@@ -802,9 +636,9 @@ operations:
     path: /hosts/shared-key
     value: "{{ target }}"
 """,
+        }
     )
-    cfg = _aggregate_config(agg_path=tmp_path / "out.yaml")
-    session = render_mod.RenderSession(cfg, inventory_path, frag_dir, runner=stub_runner)
+    session = render_mod.RenderSession(closure, runner=stub_runner)
     rendered = session.render_aggregate("combined")
     assert rendered is not None
     assert len(rendered.overrides) == 1
@@ -813,27 +647,30 @@ operations:
     assert "(target host-b)" in warning
 
 
-def test_aggregate_provenance_carries_target(tmp_path: Path, stub_runner) -> None:
+def test_aggregate_provenance_carries_target(closure_from_tree, stub_runner) -> None:
     """Provenance entries produced during aggregate rendering carry the
     contributing target's name; per-target rendering leaves it `None`
     (redundant there)."""
-    inventory_path = tmp_path / "targets.yaml"
-    inventory_path.write_text(
-        """
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
 version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+  solo:
+    path: "solo-{target}"
 targets:
   t1:
     outputs:
       combined:
         fragments: [mark]
+      solo:
+        fragments: [mark]
     variables: {}
-"""
-    )
-    frag_dir = tmp_path / "frags"
-    _write_fragment(
-        frag_dir,
-        "mark",
-        """
+""",
+            "fragments/mark.yaml": """
 fragment:
   version: 1
   description: marks
@@ -842,9 +679,9 @@ operations:
     path: /value
     value: 1
 """,
+        }
     )
-    cfg = _aggregate_config(agg_path=tmp_path / "out.yaml")
-    session = render_mod.RenderSession(cfg, inventory_path, frag_dir, runner=stub_runner)
+    session = render_mod.RenderSession(closure, runner=stub_runner)
     rendered = session.render_aggregate("combined")
     assert rendered is not None
     entry = rendered.provenance["/value"][-1]
@@ -852,42 +689,29 @@ operations:
 
     # Per-target rendering of the same fragment (via a target-scoped output)
     # leaves `target` unset — it would be redundant with only one target.
-    per_target_outputs = dict(cfg.outputs)
-    per_target_outputs["solo"] = OutputSpec(path=str(tmp_path / "solo-{target}"))
-    inventory_path.write_text(
-        """
-version: 1
-targets:
-  t1:
-    outputs:
-      solo:
-        fragments: [mark]
-    variables: {}
-"""
-    )
-    cfg2 = ProjectConfig(
-        version=1,
-        inventory="unused",
-        fragments_dir="unused",
-        outputs=per_target_outputs,
-        default_output="solo",
-    )
-    session2 = render_mod.RenderSession(cfg2, inventory_path, frag_dir, runner=stub_runner)
-    result = session2.render_target_outputs("t1")
+    result = session.render_target_outputs("t1")
     solo_entry = result.outputs["solo"].provenance["/value"][-1]
     assert solo_entry.target is None
 
 
 def test_captures_run_once_per_target_regardless_of_output_count(
-    tmp_path: Path, stub_runner
+    closure_from_tree, stub_runner
 ) -> None:
     """Regression guard for the RenderSession memoization: a target's capture
     subprocess runs at most once per session, no matter how many outputs
     (per-target or aggregate) consume the resulting variable."""
-    inventory_path = tmp_path / "targets.yaml"
-    inventory_path.write_text(
-        """
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
 version: 1
+outputs:
+  out-a:
+    path: "a-{target}"
+  out-b:
+    path: "b-{target}"
+  combined:
+    scope: aggregate
+    path: "combined.yaml"
 targets:
   t1:
     outputs:
@@ -901,13 +725,8 @@ targets:
       secret_val:
         from: capture
         command: [echo, hi]
-"""
-    )
-    frag_dir = tmp_path / "frags"
-    _write_fragment(
-        frag_dir,
-        "use-secret",
-        """
+""",
+            "fragments/use-secret.yaml": """
 fragment:
   version: 1
   description: consumes the captured variable
@@ -919,19 +738,9 @@ operations:
     path: /value
     value: "{{ secret_val }}"
 """,
+        }
     )
-    cfg = ProjectConfig(
-        version=1,
-        inventory="unused",
-        fragments_dir="unused",
-        outputs={
-            "out-a": OutputSpec(path=str(tmp_path / "a-{target}")),
-            "out-b": OutputSpec(path=str(tmp_path / "b-{target}")),
-            "combined": OutputSpec(path=str(tmp_path / "combined.yaml"), scope="aggregate"),
-        },
-        default_output=None,
-    )
-    session = render_mod.RenderSession(cfg, inventory_path, frag_dir, runner=stub_runner)
+    session = render_mod.RenderSession(closure, runner=stub_runner)
 
     result = session.render_target_outputs("t1")
     assert set(result.outputs) == {"out-a", "out-b"}
@@ -941,47 +750,28 @@ operations:
 
 
 def test_aggregate_snapshot_matches_expected(
-    config_path: Path,
-    inventory_path: Path,
-    fragments_dir: Path,
-    secrets_example_path: Path,
-    fixtures_dir: Path,
-    stub_runner,
+    example_closure, secrets_example_path: Path, fixtures_dir: Path, stub_runner
 ) -> None:
     """The example project's `ansible-inventory` aggregate output matches the
     committed snapshot, byte for byte."""
-    cfg = config_mod.load_config(config_path)
     session = render_mod.RenderSession(
-        cfg,
-        inventory_path,
-        fragments_dir,
-        secrets_path=secrets_example_path,
-        runner=stub_runner,
+        example_closure, secrets_path=secrets_example_path, runner=stub_runner
     )
     rendered = session.render_aggregate("ansible-inventory")
     assert rendered is not None
-    text = render_mod.compose_output(rendered, cfg.outputs["ansible-inventory"])
+    text = render_mod.compose_output(rendered, session.project.outputs["ansible-inventory"])
     expected = (fixtures_dir / "expected" / "ansible-inventory.yaml").read_bytes()
     assert text.encode("utf-8") == expected
 
 
 def test_render_target_outputs_skips_aggregate_scope(
-    config_path: Path,
-    inventory_path: Path,
-    fragments_dir: Path,
-    secrets_example_path: Path,
-    stub_runner,
+    example_closure, secrets_example_path: Path, stub_runner
 ) -> None:
     """Per-target rendering never produces an aggregate-scoped output, even
-    though gb10-01 contributes fragments to `ansible-inventory` (via
-    `defaults`) — see README.md "Aggregate outputs"."""
-    cfg = config_mod.load_config(config_path)
+    though gb10-01 contributes fragments to `ansible-inventory` (via a
+    module's `defaults`) — see README.md "Aggregate outputs"."""
     session = render_mod.RenderSession(
-        cfg,
-        inventory_path,
-        fragments_dir,
-        secrets_path=secrets_example_path,
-        runner=stub_runner,
+        example_closure, secrets_path=secrets_example_path, runner=stub_runner
     )
     result = session.render_target_outputs("gb10-01")
     assert "ansible-inventory" not in result.outputs

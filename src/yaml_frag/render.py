@@ -1,20 +1,23 @@
 """Top-level rendering orchestration.
 
-Ties together project config, inventory resolution, fragment loading,
-templating, merge operations, provenance, validation, serialization, and output
-templating. See README.md "Rendering algorithm" (per-target composition) and
-"Aggregate outputs" (the second, small composition loop this module adds for
+Ties together the flattened project, fragment loading, templating, merge
+operations, provenance, validation, serialization, and output templating. See
+README.md "Rendering algorithm" (per-target composition) and "Aggregate
+outputs" (the second, small composition loop this module adds for
 ``scope: aggregate`` outputs).
 
-:class:`RenderSession` owns the once-per-run work — loading the inventory and
-secret store, and memoizing each target's resolved/resolved-and-source-resolved
-variables and each fragment reference — so a single CLI invocation that
-touches many targets (``render-all``, or any aggregate output, which by
-construction visits every target) reads the inventory once and runs each
-target's variable-value captures at most once, regardless of how many outputs
-(per-target or aggregate) end up consuming them. :func:`render_target` is a
-thin wrapper over it — "build a session, render one target" — for callers that
-only need a single target.
+:class:`RenderSession` owns the once-per-run work — loading the import
+closure (:mod:`modules`) and flattening it once, plus the secret store, and
+memoizing each target's resolved/resolved-and-source-resolved variables and
+each loaded fragment (keyed by its resolved :class:`~yaml_frag.models.Ref`,
+which is collision-safe by construction: two modules may both contain a
+``host`` fragment) — so a single CLI invocation that touches many targets
+(``render-all``, or any aggregate output, which by construction visits every
+target) reads the closure once and runs each target's variable-value
+captures at most once, regardless of how many outputs (per-target or
+aggregate) end up consuming them. :func:`render_target` is a thin wrapper
+over it — "build a session, render one target" — for callers that only need a
+single target.
 
 The functions here are pure with respect to the filesystem where practical:
 :func:`render_target` and :meth:`RenderSession.render_target_outputs` return a
@@ -35,16 +38,16 @@ from dataclasses import replace
 from pathlib import Path
 
 from . import fragments as fragments_mod
-from . import merge, sources, templating, validation, yamlio
+from . import merge, modules, sources, templating, validation, yamlio
 from . import pointer as pointer_mod
-from .errors import ConfigError, TemplateRenderError, YamlFragError
-from .inventory import load_inventory, load_secret_store, resolve_target
+from .errors import ModuleError, TemplateRenderError, YamlFragError
+from .inventory import load_secret_store, resolve_target
 from .models import (
     Fragment,
-    Inventory,
     OutputSpec,
-    ProjectConfig,
+    Project,
     ProvenanceEntry,
+    Ref,
     RenderedOutput,
     RenderResult,
     ResolvedTarget,
@@ -52,16 +55,69 @@ from .models import (
     Variables,
     YamlValue,
 )
+from .modules import Closure
 from .provenance import ProvenanceTracker
 from .sources import CommandRunner
 
 #: Literal token an output template may contain; replaced by the serialized
-#: YAML during :func:`compose_output`. See README.md "Project configuration".
+#: YAML during :func:`compose_output`. See README.md "The module model".
 DOCUMENT_TOKEN = "{{ document }}"
 
 #: Substring patterns that mark a variable name for redaction in ``inspect``
 #: output. See README.md "CLI usage".
 REDACT_SUBSTRINGS = ("password", "secret", "token", "private", "credential")
+
+
+def resolve_output_path(output: OutputSpec, target: str, override: Path | None = None) -> Path:
+    """Compute the destination path for ``target`` under a single output.
+
+    When ``override`` is given, use it verbatim. Otherwise substitute
+    ``{target}`` into ``output.path``. See README.md "The module model" and
+    "CLI usage".
+    """
+    if override is not None:
+        return override
+    return Path(output.path.format(target=target))
+
+
+def resolve_aggregate_output_path(output: OutputSpec, override: Path | None = None) -> Path:
+    """Compute the destination path for an aggregate-scoped output.
+
+    There is no per-target substitution here — an aggregate output has a
+    single fixed path for the whole run (README.md "Aggregate outputs").
+    ``override`` is used verbatim when given. Kept as a distinct function from
+    :func:`resolve_output_path` (rather than a shared one with an optional
+    target) so the type of path computation being performed is explicit at
+    every call site. Raises :class:`~yaml_frag.errors.ModuleError` if
+    ``output.scope`` is not ``"aggregate"``.
+    """
+    if output.scope != "aggregate":
+        raise ModuleError(
+            f"resolve_aggregate_output_path called on a `scope: {output.scope}` output"
+        )
+    if override is not None:
+        return override
+    return Path(output.path)
+
+
+def select_validators(
+    project: Project,
+    output: OutputSpec,
+    requested: tuple[str, ...],
+) -> tuple[str, ...]:
+    """Resolve which validators to run for a single output.
+
+    If ``requested`` is non-empty, use it (validating each name exists in
+    ``project.validators``; unknown names raise
+    :class:`~yaml_frag.errors.ModuleError`). Otherwise fall back to
+    ``output.validators``. See README.md "Validation" (named validators).
+    """
+    if requested:
+        for name in requested:
+            if name not in project.validators:
+                raise ModuleError(f"unknown validator {name!r} requested")
+        return requested
+    return output.validators
 
 
 def _render_operation_path(
@@ -103,7 +159,7 @@ def _render_operation_path(
 
 
 class RenderSession:
-    """Config + inventory + secret store loaded once for a whole run.
+    """The whole import closure, flattened once, plus per-run memoization.
 
     See README.md "Rendering algorithm" and "Aggregate outputs". A session is
     constructed once per CLI invocation (or once per test) and reused across
@@ -116,10 +172,15 @@ class RenderSession:
       session regardless of how many outputs consume it — this is the point
       that keeps ``render-all`` (and aggregate rendering, which visits every
       target by construction) from re-running captures per output;
-    - fragment loading (:meth:`_load_fragment`) is memoized too, so a fragment
-      shared by many targets (the common case for an aggregate output, e.g.
-      ``ansible/host``) is read and schema-validated once, not once per
-      target.
+    - fragment loading (:meth:`_load_fragment`) is memoized by resolved
+      :class:`~models.Ref`, so a fragment shared by many targets (the common
+      case for an aggregate output, e.g. ``ansible/host``) is read and
+      schema-validated once, not once per target, and two modules that both
+      happen to contain a same-named fragment stay distinct.
+
+    ``secrets_path`` goes through :func:`modules.resolve_secrets_path`, so
+    omitting it picks up a ``secrets.yaml`` beside the inventory; the resolved
+    value (``None`` when there is none) is kept as :attr:`secrets_path`.
 
     :func:`render_target` is a thin wrapper that builds a one-shot session and
     renders a single target.
@@ -127,48 +188,35 @@ class RenderSession:
 
     def __init__(
         self,
-        config: ProjectConfig,
-        inventory_path: Path,
-        fragments_dir: Path,
+        closure: Closure,
         *,
         cli_variables: Variables | None = None,
         secrets_path: Path | None = None,
         runner: CommandRunner | None = None,
         redact_sources: bool = False,
     ) -> None:
-        self.config = config
-        self.fragments_dir = fragments_dir
+        self.closure = closure
         self.cli_variables = cli_variables
         self.runner = runner
         self.redact_sources = redact_sources
-        self.inventory: Inventory = load_inventory(inventory_path)
+        self.project: Project = modules.flatten(closure)
+        self.secrets_path = modules.resolve_secrets_path(
+            secrets_path, inventory_dir=closure.root.root
+        )
         self.store: SecretStore = (
-            load_secret_store(secrets_path) if secrets_path is not None else SecretStore()
+            load_secret_store(self.secrets_path) if self.secrets_path is not None else SecretStore()
         )
         self._resolved: dict[str, ResolvedTarget] = {}
         self._variables: dict[str, Variables] = {}
-        self._fragments: dict[str, Fragment] = {}
+        self._fragments: dict[Ref, Fragment] = {}
 
     def resolve(self, target_name: str) -> ResolvedTarget:
         """Resolve ``target_name``'s per-output fragment order and layered
-        (still-unresolved) variables, memoized for the life of the session.
-
-        Every output name the target's inventory routing references must
-        exist in ``self.config.outputs`` — raises
-        :class:`~yaml_frag.errors.ConfigError` otherwise (README.md
-        "Rendering algorithm" step 3).
-        """
+        (still-unresolved) variables, memoized for the life of the session."""
         if target_name not in self._resolved:
-            resolved = resolve_target(
-                self.inventory, target_name, cli_variables=self.cli_variables
+            self._resolved[target_name] = resolve_target(
+                self.project, target_name, cli_variables=self.cli_variables
             )
-            for output_name in resolved.output_fragments:
-                if output_name not in self.config.outputs:
-                    raise ConfigError(
-                        f"{target_name}: inventory references output {output_name!r}, "
-                        f"which is not declared in the project configuration's `outputs`"
-                    )
-            self._resolved[target_name] = resolved
         return self._resolved[target_name]
 
     def variables(self, target_name: str) -> Variables:
@@ -188,13 +236,14 @@ class RenderSession:
             )
         return self._variables[target_name]
 
-    def _load_fragment(self, ref: str) -> Fragment:
-        """Load + validate a fragment by reference, memoized for the life of
-        the session (README.md "Aggregate outputs": otherwise a fragment
-        shared by many targets would be re-read and re-validated once per
-        target)."""
+    def _load_fragment(self, ref: Ref) -> Fragment:
+        """Load + validate a fragment by resolved reference, memoized for the
+        life of the session (README.md "Aggregate outputs": otherwise a
+        fragment shared by many targets would be re-read and re-validated once
+        per target)."""
         if ref not in self._fragments:
-            self._fragments[ref] = fragments_mod.load_fragment(self.fragments_dir, ref)
+            path = modules.fragment_path(ref, self.closure)
+            self._fragments[ref] = fragments_mod.load_fragment(path, modules.display_ref(ref))
         return self._fragments[ref]
 
     def _apply_fragment(
@@ -290,7 +339,7 @@ class RenderSession:
 
         outputs: dict[str, RenderedOutput] = {}
         for output_name, refs in resolved.output_fragments.items():
-            output = self.config.outputs[output_name]
+            output = self.project.outputs[output_name]
             if output.scope == "aggregate":
                 continue
 
@@ -350,9 +399,9 @@ class RenderSession:
         assertions for an aggregate output must go through ``schema`` or a
         named validator instead (README.md "Aggregate outputs").
         """
-        output = self.config.outputs[output_name]
+        output = self.project.outputs[output_name]
         if output.scope != "aggregate":
-            raise ConfigError(
+            raise ModuleError(
                 f"output {output_name!r} has scope {output.scope!r}, not `aggregate`"
             )
 
@@ -360,7 +409,7 @@ class RenderSession:
         tracker = ProvenanceTracker()
         contributed = False
 
-        for target_name in self.inventory.targets:
+        for target_name in self.project.targets:
             resolved = self.resolve(target_name)
             refs = resolved.output_fragments.get(output_name)
             if not refs:
@@ -398,9 +447,7 @@ class RenderSession:
 def render_target(
     target_name: str,
     *,
-    config: ProjectConfig,
-    inventory_path: Path,
-    fragments_dir: Path,
+    closure: Closure,
     cli_variables: Variables | None = None,
     secrets_path: Path | None = None,
     runner: CommandRunner | None = None,
@@ -414,7 +461,7 @@ def render_target(
     validate=validate)``). Use it when a caller only ever renders one target
     and has no reason to hold a session; construct a :class:`RenderSession`
     directly to render several targets, or any aggregate output, without
-    re-reading the inventory. See README.md "Rendering algorithm".
+    re-flattening the closure. See README.md "Rendering algorithm".
 
     ``runner`` is injectable so tests can resolve captures deterministically
     without running real programs. When ``redact_sources`` is true, secret and
@@ -427,9 +474,7 @@ def render_target(
     outputs" and :meth:`RenderSession.render_aggregate`.
     """
     session = RenderSession(
-        config,
-        inventory_path,
-        fragments_dir,
+        closure,
         cli_variables=cli_variables,
         secrets_path=secrets_path,
         runner=runner,
@@ -507,3 +552,17 @@ def redact_variables(variables: Variables, *, show_secrets: bool = False) -> Var
         else:
             redacted[name] = value
     return redacted
+
+
+__all__ = [
+    "DOCUMENT_TOKEN",
+    "REDACT_SUBSTRINGS",
+    "RenderSession",
+    "compose_output",
+    "redact_variables",
+    "render_target",
+    "resolve_aggregate_output_path",
+    "resolve_output_path",
+    "select_validators",
+    "write_output",
+]
