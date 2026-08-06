@@ -67,7 +67,8 @@ from typing import Any, Literal, cast
 
 import jsonschema
 
-from .errors import ModuleError
+from . import formats
+from .errors import AmbiguousFragmentError, ModuleError, UnknownFragmentError
 from .formats import load_data_file
 from .models import (
     AggregateFragments,
@@ -104,7 +105,8 @@ _INFERRED_SUBDIRS: dict[str, str] = {
 }
 
 #: Reference kinds, each with its own directory attribute on :class:`Document`
-#: and (for fragments only) an implicit ``.yaml`` suffix.
+#: and (for fragments only) an implicit candidate-suffix enumeration across
+#: every supported input format — see :func:`fragment_path`.
 RefKind = Literal["fragments", "templates", "schemas"]
 
 #: Module names are restricted to a simple identifier-like charset so a
@@ -615,10 +617,36 @@ def _resolve_in_dir(ref: Ref, closure: Closure, kind: RefKind, rel: str) -> Path
 
 
 def fragment_path(ref: Ref, closure: Closure) -> Path:
-    """The absolute file path a resolved fragment :class:`Ref` denotes
-    (``<fragments_dir>/<path>.yaml``), containment-checked against the
-    resolved module's own directory."""
-    return _resolve_in_dir(ref, closure, "fragments", f"{ref.path}.yaml")
+    """The absolute file path a resolved fragment :class:`Ref` denotes.
+
+    A fragment reference is extension-less; this enumerates every candidate
+    under :data:`fragmint.formats.FRAGMENT_SUFFIXES`
+    (``<fragments_dir>/<path>.yaml``, ``.toml``, ``.json``) — each
+    containment-checked against the resolved module's own directory via
+    :func:`_resolve_in_dir` — and requires exactly one to exist on disk: zero
+    matches raises :class:`~fragmint.errors.UnknownFragmentError` naming every
+    path tried; two or more raises
+    :class:`~fragmint.errors.AmbiguousFragmentError` naming the reference and
+    every match. There is no preference order between formats — matching more
+    than one is always an error, never resolved by picking one. See
+    README.md "Reference resolution".
+    """
+    candidates = [
+        _resolve_in_dir(ref, closure, "fragments", f"{ref.path}{suffix}")
+        for suffix in formats.FRAGMENT_SUFFIXES
+    ]
+    matches = [candidate for candidate in candidates if candidate.is_file()]
+    if not matches:
+        tried = ", ".join(str(candidate) for candidate in candidates)
+        raise UnknownFragmentError(
+            f"fragment {display_ref(ref)!r} not found (tried {tried})"
+        )
+    if len(matches) > 1:
+        raise AmbiguousFragmentError(
+            f"fragment {display_ref(ref)!r} matches more than one file: "
+            f"{', '.join(str(match) for match in matches)}"
+        )
+    return matches[0]
 
 
 def template_path(ref: Ref, closure: Closure) -> Path:

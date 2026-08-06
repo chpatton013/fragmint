@@ -31,7 +31,7 @@ from . import modules as modules_mod
 from . import pointer as pointer_mod
 from . import render as render_mod
 from . import validation as validation_mod
-from .errors import FragmintError, ModuleError
+from .errors import AmbiguousFragmentError, FragmintError, ModuleError
 from .exit_codes import ExitCode
 from .models import (
     DataValue,
@@ -861,17 +861,33 @@ def list_modules(inventory_path: Path | None, fragments_dir_override: tuple[Path
 @_inventory_option
 @_fragments_option
 def list_fragments(inventory_path: Path | None, fragments_dir_override: tuple[Path | None, dict[str, Path]]) -> None:
-    """List every fragment reference in the closure, by document, qualified."""
+    """List every fragment reference in the closure, by document, qualified.
+
+    Globs every candidate suffix (:data:`fragmint.formats.FRAGMENT_SUFFIXES`),
+    so a fragment written in any supported input format is listed; printed
+    form is unchanged (still the qualified ref, never the file's extension).
+    A stem matching more than one format under the same directory is the same
+    ambiguity :func:`fragmint.modules.fragment_path` rejects at render time,
+    reported here instead of silently listing one arbitrarily.
+    """
     closure = _load_closure(inventory_path, fragments_dir_override)
     for doc in closure.documents:
         if doc.fragments_dir is None:
             continue
-        names = sorted(
-            str(p.relative_to(doc.fragments_dir).with_suffix("")).replace("\\", "/")
-            for p in doc.fragments_dir.rglob("*.yaml")
-        )
-        for name in names:
-            click.echo(modules_mod.display_ref(Ref(module=doc.name, path=name)))
+        by_stem: dict[str, list[Path]] = {}
+        for suffix in formats.FRAGMENT_SUFFIXES:
+            for p in doc.fragments_dir.rglob(f"*{suffix}"):
+                stem = str(p.relative_to(doc.fragments_dir).with_suffix("")).replace("\\", "/")
+                by_stem.setdefault(stem, []).append(p)
+        for stem in sorted(by_stem):
+            matches = by_stem[stem]
+            if len(matches) > 1:
+                raise AmbiguousFragmentError(
+                    f"fragment {modules_mod.display_ref(Ref(module=doc.name, path=stem))!r} "
+                    f"matches more than one file: "
+                    f"{', '.join(str(match) for match in sorted(matches))}"
+                )
+            click.echo(modules_mod.display_ref(Ref(module=doc.name, path=stem)))
 
 
 def _declared_by_label(name: str | None) -> str:

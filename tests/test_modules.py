@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from fragmint import modules
-from fragmint.errors import ModuleError
+from fragmint.errors import AmbiguousFragmentError, ModuleError, UnknownFragmentError
 from fragmint.models import Ref
 
 # --- Ref parsing and display ------------------------------------------------
@@ -974,6 +974,117 @@ def test_missing_directory_kind_rejected(closure_from_tree) -> None:
     )
     ref = modules.resolve_ref("host", declaring=closure.root, closure=closure)
     with pytest.raises(ModuleError, match="no fragments directory"):
+        modules.fragment_path(ref, closure)
+
+
+# --- Fragment resolution across input formats -------------------------------
+
+
+def test_fragment_ref_resolves_a_toml_file(closure_from_tree) -> None:
+    closure = closure_from_tree(
+        {
+            "targets.yaml": "version: 1\noutputs:\n  main:\n    path: out\ntargets:\n  t: {}\n",
+            "fragments/host.toml": '[fragment]\nversion = 1\ndescription = "x"\n',
+        }
+    )
+    ref = modules.resolve_ref("host", declaring=closure.root, closure=closure)
+    path = modules.fragment_path(ref, closure)
+    assert path == (closure.root.fragments_dir / "host.toml").resolve()
+
+
+def test_fragment_ref_resolves_a_json_file(closure_from_tree) -> None:
+    closure = closure_from_tree(
+        {
+            "targets.yaml": "version: 1\noutputs:\n  main:\n    path: out\ntargets:\n  t: {}\n",
+            "fragments/host.json": '{"fragment": {"version": 1, "description": "x"}}',
+        }
+    )
+    ref = modules.resolve_ref("host", declaring=closure.root, closure=closure)
+    path = modules.fragment_path(ref, closure)
+    assert path == (closure.root.fragments_dir / "host.json").resolve()
+
+
+def test_fragment_ref_matching_two_files_fails_closed(closure_from_tree) -> None:
+    closure = closure_from_tree(
+        {
+            "targets.yaml": "version: 1\noutputs:\n  main:\n    path: out\ntargets:\n  t: {}\n",
+            "fragments/host.yaml": "fragment:\n  version: 1\n  description: x\noperations: []\n",
+            "fragments/host.toml": '[fragment]\nversion = 1\ndescription = "x"\n',
+        }
+    )
+    ref = modules.resolve_ref("host", declaring=closure.root, closure=closure)
+    with pytest.raises(AmbiguousFragmentError):
+        modules.fragment_path(ref, closure)
+
+
+def test_ambiguous_fragment_error_names_both_files(closure_from_tree) -> None:
+    closure = closure_from_tree(
+        {
+            "targets.yaml": "version: 1\noutputs:\n  main:\n    path: out\ntargets:\n  t: {}\n",
+            "fragments/host.yaml": "fragment:\n  version: 1\n  description: x\noperations: []\n",
+            "fragments/host.json": '{"fragment": {"version": 1, "description": "x"}}',
+        }
+    )
+    ref = modules.resolve_ref("host", declaring=closure.root, closure=closure)
+    with pytest.raises(AmbiguousFragmentError) as excinfo:
+        modules.fragment_path(ref, closure)
+    message = str(excinfo.value)
+    assert "host.yaml" in message
+    assert "host.json" in message
+
+
+def test_missing_fragment_error_names_every_candidate_path(closure_from_tree) -> None:
+    closure = closure_from_tree(
+        {
+            "targets.yaml": "version: 1\noutputs:\n  main:\n    path: out\ntargets:\n  t: {}\n",
+            "fragments/.keep": "",
+        }
+    )
+    ref = modules.resolve_ref("host", declaring=closure.root, closure=closure)
+    with pytest.raises(UnknownFragmentError) as excinfo:
+        modules.fragment_path(ref, closure)
+    message = str(excinfo.value)
+    assert "host.yaml" in message
+    assert "host.toml" in message
+    assert "host.json" in message
+
+
+def test_yml_is_not_a_fragment_candidate_suffix(closure_from_tree) -> None:
+    closure = closure_from_tree(
+        {
+            "targets.yaml": "version: 1\noutputs:\n  main:\n    path: out\ntargets:\n  t: {}\n",
+            "fragments/host.yml": "fragment:\n  version: 1\n  description: x\noperations: []\n",
+        }
+    )
+    ref = modules.resolve_ref("host", declaring=closure.root, closure=closure)
+    with pytest.raises(UnknownFragmentError):
+        modules.fragment_path(ref, closure)
+
+
+def test_display_ref_is_extension_less_for_a_toml_fragment(closure_from_tree) -> None:
+    closure = closure_from_tree(
+        {
+            "targets.yaml": "version: 1\noutputs:\n  main:\n    path: out\ntargets:\n  t: {}\n",
+            "fragments/host.toml": '[fragment]\nversion = 1\ndescription = "x"\n',
+        }
+    )
+    ref = modules.resolve_ref("host", declaring=closure.root, closure=closure)
+    assert modules.display_ref(ref) == "host"
+
+
+def test_fragment_candidate_paths_are_containment_checked(closure_from_tree) -> None:
+    """A `../` escape still fails closed for every candidate suffix, not just
+    the `.yaml` one."""
+    closure = closure_from_tree(
+        {
+            "proj/targets.yaml": "version: 1\noutputs:\n  main:\n    path: out\ntargets:\n  t: {}\n",
+            "proj/fragments/host.yaml": "fragment:\n  version: 1\n  description: x\noperations: []\n",
+            "secret.toml": "nope = true\n",
+        },
+        root="proj/targets.yaml",
+    )
+    ref = modules.resolve_ref("../../secret", declaring=closure.root, closure=closure)
+    with pytest.raises(ModuleError, match="escapes"):
         modules.fragment_path(ref, closure)
 
 
