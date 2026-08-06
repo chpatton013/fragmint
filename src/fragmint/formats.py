@@ -25,7 +25,10 @@ See README.md "The module model" and "Serialization".
 
 from __future__ import annotations
 
+import datetime
 import io
+import json
+import tomllib
 from functools import cache
 from pathlib import Path
 from typing import Any, Protocol
@@ -36,6 +39,7 @@ from ruamel.yaml.nodes import ScalarNode
 from ruamel.yaml.resolver import VersionedResolver
 from ruamel.yaml.scalarstring import LiteralScalarString, SingleQuotedScalarString
 
+from . import pointer
 from .errors import FragmintError
 from .models import DataValue, Format
 
@@ -169,8 +173,64 @@ class _YamlCodec:
         return text.rstrip("\n") + "\n"
 
 
+class _TomlCodec:
+    """TOML, read via the stdlib ``tomllib`` (no writer yet — see
+    :mod:`fragmint.errors`.``SerializationError`` and README.md
+    "Serialization")."""
+
+    name: Format = "toml"
+
+    def load(self, text: str, *, path: Path) -> DataValue:
+        try:
+            data = tomllib.loads(text)
+        except tomllib.TOMLDecodeError as exc:
+            raise FragmintError(f"invalid toml in {path}: {exc}") from exc
+        _reject_toml_datetimes(data, "", path=path)
+        return _normalize(data)
+
+    def dump(self, document: DataValue) -> str:
+        raise NotImplementedError("TOML output is not yet supported")
+
+
+def _reject_toml_datetimes(node: Any, ptr: str, *, path: Path) -> None:
+    """TOML's ``date``/``time``/``datetime`` types have no home in
+    :data:`~fragmint.models.DataValue`; unlike YAML (which stringifies them
+    for backward compatibility — see :mod:`_normalize`'s fallback), TOML input
+    fails closed on them, naming the pointer and telling the author to quote
+    the value. See README.md "Supported formats"."""
+    if isinstance(node, (datetime.date, datetime.time)):
+        raise FragmintError(
+            f"cannot load {path}: a date/time value at {ptr or '/'} has no "
+            f"home in fragmint's data model; quote it as a string"
+        )
+    if isinstance(node, dict):
+        for key, value in node.items():
+            _reject_toml_datetimes(value, pointer.join(ptr, key), path=path)
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            _reject_toml_datetimes(item, pointer.join(ptr, str(index)), path=path)
+
+
+class _JsonCodec:
+    """JSON, read and written via the stdlib ``json`` module."""
+
+    name: Format = "json"
+
+    def load(self, text: str, *, path: Path) -> DataValue:
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise FragmintError(f"invalid json in {path}: {exc}") from exc
+        return _normalize(data)
+
+    def dump(self, document: DataValue) -> str:
+        raise NotImplementedError("JSON output is not yet supported")
+
+
 _CODECS: dict[Format, Codec] = {
     "yaml": _YamlCodec(),
+    "toml": _TomlCodec(),
+    "json": _JsonCodec(),
 }
 
 

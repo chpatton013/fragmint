@@ -60,17 +60,6 @@ def _type_name(value: DataValue) -> str:
     return type(value).__name__
 
 
-def _escape_token(token: str) -> str:
-    return token.replace("~", "~0").replace("/", "~1")
-
-
-def _join_path(base: str, key: str) -> str:
-    escaped = _escape_token(key)
-    if base in ("", "/"):
-        return "/" + escaped
-    return base + "/" + escaped
-
-
 def _context(entry: ProvenanceEntry) -> str:
     return f"fragment {entry.fragment}, operation {entry.operation_index}"
 
@@ -154,7 +143,7 @@ def _merge_recursive(
     overwrite_ok: bool,
 ) -> None:
     for key, incoming_value in incoming.items():
-        child_path = _join_path(path, key)
+        child_path = pointer.join(path, key)
         if key not in target:
             target[key] = incoming_value
             tracker.record(child_path, entry, replaced_existing=False)

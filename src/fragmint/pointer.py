@@ -26,6 +26,23 @@ def _decode_token(token: str) -> str:
     return token.replace("~1", "/").replace("~0", "~")
 
 
+def escape_token(token: str) -> str:
+    """Encode one raw token per RFC 6901: ``~`` -> ``~0`` before ``/`` ->
+    ``~1``."""
+    return token.replace("~", "~0").replace("/", "~1")
+
+
+def join(base: str, token: str) -> str:
+    """Append one raw (unescaped) ``token`` to an already-built pointer
+    ``base``, escaping it. Used wherever a diagnostic needs to build up a
+    JSON Pointer while walking a document (see :mod:`merge` and
+    :mod:`formats`)."""
+    escaped = escape_token(str(token))
+    if base in ("", "/"):
+        return "/" + escaped
+    return base + "/" + escaped
+
+
 def parse_pointer(pointer: str) -> tuple[str, ...]:
     """Split a JSON Pointer string into its decoded reference tokens.
 

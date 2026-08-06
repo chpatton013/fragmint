@@ -56,6 +56,15 @@ class FragmentError(FragmintError):
     exit_code = ExitCode.FRAGMENT_VALIDATION
 
 
+class AmbiguousFragmentError(FragmentError):
+    """An extension-less fragment reference matches more than one file under
+    its fragments directory, differing only by format extension (e.g. both
+    ``host.yaml`` and ``host.toml``). The reference alone cannot say which
+    one was meant, so this fails closed naming the reference and every
+    matching file rather than silently preferring one (README.md "Reference
+    resolution")."""
+
+
 class VariableResolutionError(FragmintError):
     """A variable value source could not be resolved.
 
