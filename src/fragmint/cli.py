@@ -34,6 +34,7 @@ from . import yamlio
 from .errors import FragmintError, ModuleError
 from .exit_codes import ExitCode
 from .models import (
+    DataValue,
     OutputSpec,
     Project,
     ProvenanceEntry,
@@ -41,7 +42,6 @@ from .models import (
     RenderedOutput,
     ResolvedTarget,
     Variables,
-    YamlValue,
 )
 from .modules import Closure, Document
 
@@ -956,9 +956,9 @@ def inspect(
         if only_output is not None:
             details = {only_output: details[only_output]}
 
-        def _entries_doc(entries: tuple[modules_mod.AggregateFragmentEntry, ...]) -> YamlValue:
+        def _entries_doc(entries: tuple[modules_mod.AggregateFragmentEntry, ...]) -> DataValue:
             return cast(
-                YamlValue,
+                DataValue,
                 [
                     {
                         "ref": modules_mod.display_ref(entry.ref),
@@ -971,10 +971,10 @@ def inspect(
         redacted_variables = render_mod.redact_variables(
             render_mod.layered_aggregate_variables(project), show_secrets=show_secrets
         )
-        aggregate_doc: dict[str, YamlValue] = {
+        aggregate_doc: dict[str, DataValue] = {
             "scope": "aggregate",
             "outputs": cast(
-                YamlValue,
+                DataValue,
                 {
                     name: {
                         "prologue": _entries_doc(prologue),
@@ -983,7 +983,7 @@ def inspect(
                     for name, (prologue, epilogue) in details.items()
                 },
             ),
-            "variables": cast(YamlValue, redacted_variables),
+            "variables": cast(DataValue, redacted_variables),
         }
         click.echo(yamlio.dump_str(aggregate_doc), nl=False)
         return
@@ -995,17 +995,17 @@ def inspect(
     redacted_variables = render_mod.redact_variables(
         resolved.variables, show_secrets=show_secrets
     )
-    output_doc: dict[str, YamlValue] = {
+    output_doc: dict[str, DataValue] = {
         "target": resolved.name,
         "groups": list(resolved.groups),
         "outputs": cast(
-            YamlValue,
+            DataValue,
             {
                 name: {"fragments": [modules_mod.display_ref(ref) for ref in fragments]}
                 for name, fragments in resolved.output_fragments.items()
             },
         ),
-        "variables": cast(YamlValue, redacted_variables),
+        "variables": cast(DataValue, redacted_variables),
     }
     click.echo(yamlio.dump_str(output_doc), nl=False)
 

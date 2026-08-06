@@ -7,9 +7,10 @@ and :mod:`render`.
 
 Type conventions
 ----------------
-``YamlValue`` is the recursive type of any parsed-YAML node (mapping, list,
-scalar, or ``None``). ``Variables`` is the flat per-target variable map. Keep
-these aliases in one place so every module agrees on the shapes.
+``DataValue`` is the recursive type of any parsed document node (mapping,
+list, scalar, or ``None``), independent of the file format it was parsed
+from. ``Variables`` is the flat per-target variable map. Keep these aliases
+in one place so every module agrees on the shapes.
 """
 
 from __future__ import annotations
@@ -17,22 +18,22 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-#: A node in a parsed YAML/JSON document.
-YamlValue = (
+#: A node in a parsed document (any supported input format).
+DataValue = (
     None
     | bool
     | int
     | float
     | str
-    | list["YamlValue"]
-    | dict[str, "YamlValue"]
+    | list["DataValue"]
+    | dict[str, "DataValue"]
 )
 
 #: The flat variable map used for template rendering and required-variable
-#: checks. After resolution these are concrete :data:`YamlValue`s; before
+#: checks. After resolution these are concrete :data:`DataValue`s; before
 #: resolution a value may instead be an untagged literal or a ``from:`` source
 #: mapping (see :mod:`sources`).
-Variables = dict[str, YamlValue]
+Variables = dict[str, DataValue]
 
 
 @dataclass(frozen=True)
@@ -42,7 +43,7 @@ class LiteralSource:
     literal mapping that would otherwise look like a source. See README.md
     "Variable value sources"."""
 
-    value: YamlValue
+    value: DataValue
 
 
 @dataclass(frozen=True)
@@ -80,7 +81,7 @@ class SecretStore:
     :mod:`sources`. See README.md "Secrets".
     """
 
-    secrets: dict[str, YamlValue] = field(default_factory=dict)
+    secrets: dict[str, DataValue] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -214,11 +215,11 @@ class FragmentOperation:
 
     op: str
     path: str
-    value: YamlValue = None
+    value: DataValue = None
     deduplicate: bool = False
     missing_ok: bool = False
     overwrite_ok: bool = False
-    assertion: dict[str, YamlValue] = field(default_factory=dict)
+    assertion: dict[str, DataValue] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -341,7 +342,7 @@ class RenderedOutput:
     """
 
     name: str
-    document: dict[str, YamlValue]
+    document: dict[str, DataValue]
     provenance: dict[str, list[ProvenanceEntry]] = field(default_factory=dict)
     overrides: tuple[str, ...] = ()
 

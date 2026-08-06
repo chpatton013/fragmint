@@ -139,7 +139,7 @@ def load_fragment(path: Path, name: str) -> Fragment:
 
     # Schema validation above guarantees the shape README.md documents; treat the
     # parsed document as loosely-typed data from here on rather than fighting
-    # the recursive YamlValue union.
+    # the recursive DataValue union.
     doc = cast(dict[str, Any], raw)
 
     fragment_meta = doc.get("fragment", {})

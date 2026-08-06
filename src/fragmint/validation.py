@@ -24,7 +24,7 @@ from typing import Any
 import jsonschema
 
 from .errors import ValidationError
-from .models import YamlValue
+from .models import DataValue
 from .yamlio import load_file
 
 #: Bounded timeout (seconds) for an external validator subprocess.
@@ -36,7 +36,7 @@ def _schema_path(name: str) -> Path:
     return Path(__file__).resolve().parent / "schemas" / name
 
 
-def check_unresolved_markers(document: YamlValue) -> None:
+def check_unresolved_markers(document: DataValue) -> None:
     """Reject a document containing unresolved template markers.
 
     Recurse through ``document`` and raise
@@ -46,7 +46,7 @@ def check_unresolved_markers(document: YamlValue) -> None:
     "Validation".
     """
 
-    def _walk(node: YamlValue, path: str) -> None:
+    def _walk(node: DataValue, path: str) -> None:
         if isinstance(node, dict):
             for key, value in node.items():
                 _walk(value, f"{path}/{key}")
@@ -61,7 +61,7 @@ def check_unresolved_markers(document: YamlValue) -> None:
     _walk(document, "")
 
 
-def validate_against_schema(document: YamlValue, schema_path: Path) -> None:
+def validate_against_schema(document: DataValue, schema_path: Path) -> None:
     """Validate the rendered document against a project-supplied JSON schema.
 
     Only invoked when ``config.output.schema`` is set. Raise

@@ -50,11 +50,11 @@ from typing import Protocol
 from .errors import CaptureError, ModuleError, SecretNotFoundError
 from .models import (
     CaptureSource,
+    DataValue,
     LiteralSource,
     SecretSource,
     SecretStore,
     VariableSource,
-    YamlValue,
 )
 
 #: Default wall-clock timeout (seconds) for a capture subprocess.
@@ -109,7 +109,7 @@ class DefaultCommandRunner:
         return completed.stdout
 
 
-def is_source(raw: YamlValue) -> bool:
+def is_source(raw: DataValue) -> bool:
     """Return whether ``raw`` should be interpreted as a tagged source.
 
     True only when ``raw`` is a mapping whose :data:`DISCRIMINATOR` value is in
@@ -121,7 +121,7 @@ def is_source(raw: YamlValue) -> bool:
     return isinstance(kind, str) and kind in SOURCE_KINDS
 
 
-def parse_source(raw: YamlValue) -> VariableSource:
+def parse_source(raw: DataValue) -> VariableSource:
     """Parse a raw variable value into a :class:`~models.VariableSource`.
 
     Untagged values become a ``LiteralSource``. A tagged mapping is validated
@@ -192,7 +192,7 @@ def resolve_source(
     variable: str,
     timeout: float = DEFAULT_CAPTURE_TIMEOUT,
     redact: bool = False,
-) -> YamlValue:
+) -> DataValue:
     """Resolve a single source to a concrete value.
 
     - ``LiteralSource`` -> its value.
@@ -275,7 +275,7 @@ def resolve_source(
 
 
 def resolve_variable(
-    raw: YamlValue,
+    raw: DataValue,
     *,
     secrets: SecretStore,
     runner: CommandRunner,
@@ -283,7 +283,7 @@ def resolve_variable(
     variable: str,
     timeout: float = DEFAULT_CAPTURE_TIMEOUT,
     redact: bool = False,
-) -> YamlValue:
+) -> DataValue:
     """Parse and resolve a single variable's raw value in one call.
 
     ``resolve_source(parse_source(raw), ...)`` — the per-variable entry point
@@ -302,7 +302,7 @@ def resolve_variable(
     )
 
 
-def describe_source(raw: YamlValue) -> str:
+def describe_source(raw: DataValue) -> str:
     """Return a redacted, non-executing description of a variable's source.
 
     Used by ``inspect``/``explain`` so they can show what a variable is WITHOUT

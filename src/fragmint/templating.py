@@ -38,7 +38,7 @@ from jinja2.runtime import Undefined
 from jinja2.sandbox import SandboxedEnvironment
 
 from .errors import TemplateRenderError
-from .models import Variables, YamlValue
+from .models import DataValue, Variables
 
 #: The only filters exposed to fragment templates (README.md "Template rendering").
 _ALLOWED_FILTERS = {"default", "lower", "upper", "replace", "join", "tojson"}
@@ -73,7 +73,7 @@ def _render_string(
     scope: str,
     fragment: str,
     operation_index: int,
-) -> YamlValue:
+) -> DataValue:
     match = _WHOLE_EXPRESSION_RE.fullmatch(text)
     try:
         if match is not None and "{{" not in match.group("expr"):
@@ -92,13 +92,13 @@ def _render_string(
 
 
 def render_value(
-    value: YamlValue,
+    value: DataValue,
     variables: Variables,
     *,
     scope: str,
     fragment: str,
     operation_index: int,
-) -> YamlValue:
+) -> DataValue:
     """Recursively render every scalar string within ``value``.
 
     Walks mappings and lists; renders string leaves through the strict
@@ -159,7 +159,7 @@ def _names_in_string(text: str) -> tuple[str, ...]:
     return tuple(sorted(meta.find_undeclared_variables(parsed)))
 
 
-def _collect_names(value: YamlValue) -> tuple[str, ...]:
+def _collect_names(value: DataValue) -> tuple[str, ...]:
     if isinstance(value, dict):
         names: list[str] = []
         for item in value.values():
@@ -175,7 +175,7 @@ def _collect_names(value: YamlValue) -> tuple[str, ...]:
     return ()
 
 
-def collect_variable_names(value: YamlValue) -> tuple[str, ...]:
+def collect_variable_names(value: DataValue) -> tuple[str, ...]:
     """Every variable name a template in ``value`` references, in a
     deterministic, deduplicated, first-appearance order.
 

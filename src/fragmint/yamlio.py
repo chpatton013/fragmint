@@ -7,7 +7,7 @@ Loading:
 - Parse safely (no arbitrary Python object construction / no unsafe tags).
 - Preserve mapping insertion order (native ``dict`` in 3.12 already does; when
   using ruamel round-trip, normalize to plain ``dict``/``list``/scalars before
-  returning so downstream code sees the ``YamlValue`` shape from
+  returning so downstream code sees the ``DataValue`` shape from
   :mod:`models`).
 
 Serialization requirements (README.md "YAML serialization"):
@@ -43,7 +43,7 @@ from ruamel.yaml.resolver import VersionedResolver
 from ruamel.yaml.scalarstring import LiteralScalarString, SingleQuotedScalarString
 
 from .errors import FragmintError
-from .models import YamlValue
+from .models import DataValue
 
 _load_yaml = YAML(typ="safe")
 _load_yaml.allow_duplicate_keys = False
@@ -71,7 +71,7 @@ def _needs_yaml_1_1_quoting(value: str) -> bool:
     return bool(tag.suffix != "tag:yaml.org,2002:str")
 
 
-def _normalize(node: Any) -> YamlValue:
+def _normalize(node: Any) -> DataValue:
     """Recursively convert ruamel/plain containers into plain dict/list/scalars."""
     if isinstance(node, dict):
         return {str(key): _normalize(value) for key, value in node.items()}
@@ -84,7 +84,7 @@ def _normalize(node: Any) -> YamlValue:
     return str(node)
 
 
-def load_file(path: Path) -> YamlValue:
+def load_file(path: Path) -> DataValue:
     """Parse a single YAML document from ``path``.
 
     Raise :class:`~fragmint.errors.FragmintError` (or the most specific
@@ -102,8 +102,8 @@ def load_file(path: Path) -> YamlValue:
     return _normalize(data)
 
 
-def _to_dumpable(node: YamlValue) -> Any:
-    """Convert plain YamlValue into ruamel-friendly structures: block literal
+def _to_dumpable(node: DataValue) -> Any:
+    """Convert plain DataValue into ruamel-friendly structures: block literal
     scalars for multiline strings, single-quoted scalars for strings that a
     YAML 1.1 reader would not parse back as themselves when left bare."""
     if isinstance(node, dict):
@@ -117,7 +117,7 @@ def _to_dumpable(node: YamlValue) -> Any:
     return node
 
 
-def dump_str(document: YamlValue) -> str:
+def dump_str(document: DataValue) -> str:
     """Serialize ``document`` to a deterministic YAML string.
 
     Does NOT include any output-template header. Must satisfy every requirement

@@ -18,7 +18,7 @@ tests).
 from __future__ import annotations
 
 from .errors import FragmintError, MergeConflictError
-from .models import YamlValue
+from .models import DataValue
 
 
 def _decode_token(token: str) -> str:
@@ -44,7 +44,7 @@ def parse_pointer(pointer: str) -> tuple[str, ...]:
     return tuple(_decode_token(token) for token in pointer[1:].split("/"))
 
 
-def get(document: YamlValue, pointer: str) -> tuple[bool, YamlValue]:
+def get(document: DataValue, pointer: str) -> tuple[bool, DataValue]:
     """Look up ``pointer`` in ``document``.
 
     Return ``(True, value)`` when the path exists, else ``(False, None)``.
@@ -54,7 +54,7 @@ def get(document: YamlValue, pointer: str) -> tuple[bool, YamlValue]:
     raises; only mutation (:func:`set_`, :func:`delete`) reports conflicts.
     """
     tokens = parse_pointer(pointer)
-    node: YamlValue = document
+    node: DataValue = document
     for token in tokens:
         if not isinstance(node, dict) or token not in node:
             return False, None
@@ -62,7 +62,7 @@ def get(document: YamlValue, pointer: str) -> tuple[bool, YamlValue]:
     return True, node
 
 
-def set_(document: dict[str, YamlValue], pointer: str, value: YamlValue) -> None:
+def set_(document: dict[str, DataValue], pointer: str, value: DataValue) -> None:
     """Set ``value`` at ``pointer``, creating missing parent mappings.
 
     Mutates ``document`` in place. Used by the ``set`` operation (README.md
@@ -80,11 +80,11 @@ def set_(document: dict[str, YamlValue], pointer: str, value: YamlValue) -> None
         document.update(value)
         return
 
-    node: dict[str, YamlValue] = document
+    node: dict[str, DataValue] = document
     for token in tokens[:-1]:
         child = node.get(token)
         if token not in node:
-            new_child: dict[str, YamlValue] = {}
+            new_child: dict[str, DataValue] = {}
             node[token] = new_child
             node = new_child
         elif isinstance(child, dict):
@@ -97,7 +97,7 @@ def set_(document: dict[str, YamlValue], pointer: str, value: YamlValue) -> None
     node[tokens[-1]] = value
 
 
-def delete(document: dict[str, YamlValue], pointer: str, *, missing_ok: bool) -> bool:
+def delete(document: dict[str, DataValue], pointer: str, *, missing_ok: bool) -> bool:
     """Remove the field at ``pointer``.
 
     Return ``True`` if something was removed. If the path is absent and
@@ -111,7 +111,7 @@ def delete(document: dict[str, YamlValue], pointer: str, *, missing_ok: bool) ->
         document.clear()
         return True
 
-    node: YamlValue = document
+    node: DataValue = document
     for token in tokens[:-1]:
         if not isinstance(node, dict) or token not in node:
             if missing_ok:

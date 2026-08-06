@@ -37,11 +37,11 @@ from collections.abc import Callable
 
 from . import pointer
 from .errors import AssertionFailedError, MergeConflictError
-from .models import FragmentOperation, ProvenanceEntry, YamlValue
+from .models import DataValue, FragmentOperation, ProvenanceEntry
 from .provenance import ProvenanceTracker
 
 
-def _type_name(value: YamlValue) -> str:
+def _type_name(value: DataValue) -> str:
     """A human-readable YAML-ish type name for error messages."""
     if isinstance(value, bool):
         return "boolean"
@@ -76,7 +76,7 @@ def _context(entry: ProvenanceEntry) -> str:
 
 
 def apply_operation(
-    document: dict[str, YamlValue],
+    document: dict[str, DataValue],
     operation: FragmentOperation,
     *,
     entry: ProvenanceEntry,
@@ -100,7 +100,7 @@ def apply_operation(
     handler(document, operation, entry=entry, tracker=tracker)
 
 
-def structurally_equal(a: YamlValue, b: YamlValue) -> bool:
+def structurally_equal(a: DataValue, b: DataValue) -> bool:
     """Return whether two parsed-YAML values are structurally equal.
 
     Used for ``deduplicate`` and ``remove-list-items`` matching (README.md
@@ -127,7 +127,7 @@ def structurally_equal(a: YamlValue, b: YamlValue) -> bool:
 
 
 def apply_set(
-    document: dict[str, YamlValue],
+    document: dict[str, DataValue],
     operation: FragmentOperation,
     *,
     entry: ProvenanceEntry,
@@ -145,8 +145,8 @@ def apply_set(
 
 
 def _merge_recursive(
-    target: dict[str, YamlValue],
-    incoming: dict[str, YamlValue],
+    target: dict[str, DataValue],
+    incoming: dict[str, DataValue],
     *,
     path: str,
     entry: ProvenanceEntry,
@@ -206,7 +206,7 @@ def _merge_recursive(
 
 
 def apply_merge(
-    document: dict[str, YamlValue],
+    document: dict[str, DataValue],
     operation: FragmentOperation,
     *,
     entry: ProvenanceEntry,
@@ -244,8 +244,8 @@ def apply_merge(
     )
 
 
-def _dedupe(items: list[YamlValue]) -> list[YamlValue]:
-    result: list[YamlValue] = []
+def _dedupe(items: list[DataValue]) -> list[DataValue]:
+    result: list[DataValue] = []
     for item in items:
         if not any(structurally_equal(item, existing) for existing in result):
             result.append(item)
@@ -253,7 +253,7 @@ def _dedupe(items: list[YamlValue]) -> list[YamlValue]:
 
 
 def _apply_list_insert(
-    document: dict[str, YamlValue],
+    document: dict[str, DataValue],
     operation: FragmentOperation,
     *,
     entry: ProvenanceEntry,
@@ -268,7 +268,7 @@ def _apply_list_insert(
 
     existed, current = pointer.get(document, operation.path)
     if not existed:
-        current_list: list[YamlValue] = []
+        current_list: list[DataValue] = []
     elif isinstance(current, list):
         current_list = current
     else:
@@ -290,7 +290,7 @@ def _apply_list_insert(
 
 
 def apply_append(
-    document: dict[str, YamlValue],
+    document: dict[str, DataValue],
     operation: FragmentOperation,
     *,
     entry: ProvenanceEntry,
@@ -301,7 +301,7 @@ def apply_append(
 
 
 def apply_prepend(
-    document: dict[str, YamlValue],
+    document: dict[str, DataValue],
     operation: FragmentOperation,
     *,
     entry: ProvenanceEntry,
@@ -312,7 +312,7 @@ def apply_prepend(
 
 
 def apply_remove(
-    document: dict[str, YamlValue],
+    document: dict[str, DataValue],
     operation: FragmentOperation,
     *,
     entry: ProvenanceEntry,
@@ -332,7 +332,7 @@ def apply_remove(
 
 
 def apply_remove_list_items(
-    document: dict[str, YamlValue],
+    document: dict[str, DataValue],
     operation: FragmentOperation,
     *,
     entry: ProvenanceEntry,
@@ -353,7 +353,7 @@ def apply_remove_list_items(
         )
 
     to_remove = operation.value
-    remaining: list[YamlValue] = []
+    remaining: list[DataValue] = []
     removed_any = False
     for item in current:
         if any(structurally_equal(item, target) for target in to_remove):
@@ -373,8 +373,8 @@ def apply_remove_list_items(
     tracker.record(operation.path, entry, replaced_existing=False)
 
 
-def _matches_assert_type(value: YamlValue, type_name: YamlValue) -> bool:
-    checkers: dict[str, Callable[[YamlValue], bool]] = {
+def _matches_assert_type(value: DataValue, type_name: DataValue) -> bool:
+    checkers: dict[str, Callable[[DataValue], bool]] = {
         "mapping": lambda v: isinstance(v, dict),
         "list": lambda v: isinstance(v, list),
         "string": lambda v: isinstance(v, str),
@@ -387,7 +387,7 @@ def _matches_assert_type(value: YamlValue, type_name: YamlValue) -> bool:
 
 
 def apply_assert(
-    document: dict[str, YamlValue],
+    document: dict[str, DataValue],
     operation: FragmentOperation,
 ) -> None:
     """Evaluate an ``assert`` operation without mutating ``document``.

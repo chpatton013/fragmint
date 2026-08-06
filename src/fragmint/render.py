@@ -44,6 +44,7 @@ from . import pointer as pointer_mod
 from .errors import FragmintError, InventoryError, ModuleError, TemplateRenderError
 from .inventory import RESERVED_VARIABLE_NAMES, load_secret_store, resolve_target
 from .models import (
+    DataValue,
     Fragment,
     OutputSpec,
     Project,
@@ -55,7 +56,6 @@ from .models import (
     SecretStore,
     Variables,
     VariableSource,
-    YamlValue,
 )
 from .modules import Closure
 from .provenance import ProvenanceTracker
@@ -238,10 +238,10 @@ class RenderSession:
         )
         self._resolved: dict[str, ResolvedTarget] = {}
         self._sources: dict[str, dict[str, VariableSource]] = {}
-        self._values: dict[tuple[str, str], YamlValue | BaseException] = {}
+        self._values: dict[tuple[str, str], DataValue | BaseException] = {}
         self._fragments: dict[Ref, Fragment] = {}
         self._aggregate_source_map: dict[str, VariableSource] | None = None
-        self._aggregate_values: dict[str, YamlValue | BaseException] = {}
+        self._aggregate_values: dict[str, DataValue | BaseException] = {}
         self._runner: CommandRunner = runner if runner is not None else sources.DefaultCommandRunner()
 
     def resolve(self, target_name: str) -> ResolvedTarget:
@@ -267,7 +267,7 @@ class RenderSession:
             }
         return self._sources[target_name]
 
-    def variable(self, target_name: str, name: str) -> YamlValue:
+    def variable(self, target_name: str, name: str) -> DataValue:
         """Resolve one variable's value source for ``target_name`` — secret
         lookup or capture execution — memoized per ``(target_name, name)``
         for the life of the session, including failures: a repeat demand for
@@ -334,7 +334,7 @@ class RenderSession:
             }
         return self._aggregate_source_map
 
-    def _aggregate_variable(self, name: str) -> YamlValue:
+    def _aggregate_variable(self, name: str) -> DataValue:
         """Resolve one aggregate-scope variable by name — secret lookup or
         capture execution — memoized for the life of the session. The
         aggregate-scope analogue of :meth:`variable`; ``target`` is not a
@@ -392,7 +392,7 @@ class RenderSession:
 
     def _apply_fragment(
         self,
-        doc: dict[str, YamlValue],
+        doc: dict[str, DataValue],
         tracker: ProvenanceTracker,
         *,
         scope_label: str,
@@ -478,7 +478,7 @@ class RenderSession:
             )
             merge.apply_operation(doc, rendered_op, entry=entry, tracker=tracker)
 
-    def _validate_document(self, doc: dict[str, YamlValue], output: OutputSpec) -> None:
+    def _validate_document(self, doc: dict[str, DataValue], output: OutputSpec) -> None:
         """Generic structural validation shared by per-target and aggregate
         rendering (README.md "Validation"): reject unresolved template
         markers, then optionally validate against ``output.schema``."""
@@ -529,7 +529,7 @@ class RenderSession:
             fragments = [self._load_fragment(ref) for ref in refs]
             output_variables = self._variables_for_output(target_name, output_name, fragments)
 
-            doc: dict[str, YamlValue] = {}
+            doc: dict[str, DataValue] = {}
             tracker = ProvenanceTracker()
             for fragment in fragments:
                 self._apply_fragment(
@@ -606,7 +606,7 @@ class RenderSession:
         spec = self.project.aggregate_output_fragments.get(output_name)
         has_outer = spec is not None and bool(spec.prologue or spec.epilogue)
 
-        doc: dict[str, YamlValue] = {}
+        doc: dict[str, DataValue] = {}
         tracker = ProvenanceTracker()
 
         # Loading these here (before touching the aggregate scope at all)
