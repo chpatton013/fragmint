@@ -677,6 +677,11 @@ aggregate scope" above); use `{{ output }}` for the output's own name.
 Prologue/epilogue alone, with no target contributing, does not produce the
 output — see the not-produced rule below.
 
+`inspect --aggregate` (see "CLI usage") shows this effective order —
+concatenated across the closure, with each entry's declaring document — and
+the aggregate variable layer, without rendering anything, so it stays usable
+even when no target contributes or an epilogue `assert` would fail.
+
 **Load-time rules** (README.md "The module model"): an aggregate output's
 `path` must not contain `{target}` (it's a single fixed path, not a
 wildcard); an aggregate output can never be `default: true` (`default` exists
@@ -696,7 +701,10 @@ scopes the whole run to one output, of either scope, which is the fast
 iteration loop for authoring an aggregate output; `explain` accepts an
 optional TARGET, which may be omitted only when `--only` names an aggregate
 output; `list outputs` prints each output's name, scope, and defining
-document. `--only NAME` scopes variable resolution too — no other output's
+document; `inspect --aggregate` shows the target-less part — effective
+prologue/epilogue order with each entry's declaring document, and the
+aggregate variable layer — that neither `inspect TARGET` nor `list outputs`
+can (see "CLI usage"). `--only NAME` scopes variable resolution too — no other output's
 secrets/captures/schema are needed — which is what makes it a usable
 authoring loop even when the closure has secrets or captures `NAME` doesn't
 consume (see "Resolution timing").
@@ -1292,6 +1300,8 @@ yaml-frag validate-all
 yaml-frag explain gb10-01 [--path /some/path]   # where did each value come from? (all outputs, or --only)
 yaml-frag explain --only ansible-inventory   # TARGET omitted: only valid for an aggregate --only
 yaml-frag inspect gb10-01                # resolved groups/per-output fragments/vars (redacted)
+yaml-frag inspect --aggregate            # effective prologue/epilogue order + declaring doc, aggregate vars
+yaml-frag inspect --aggregate --only ansible-inventory   # narrow to one aggregate output
 yaml-frag list targets|fragments|groups|outputs|modules
 ```
 
@@ -1367,6 +1377,22 @@ redacting any variable whose name contains `password`, `secret`, `token`,
 `capture` source regardless of name (shown as a non-executing description,
 e.g. `<capture: openssl passwd -6 -stdin>`). Pass `--show-secrets` to reveal
 literal values (captures are still never executed for inspection).
+
+`inspect --aggregate` covers the target-less part of the aggregate surface
+that `inspect TARGET` structurally cannot: every aggregate output's effective
+prologue/epilogue order — the closure-order concatenation across every
+document that contributes one (see "Aggregate outputs" — "Prologue and
+epilogue"), which is not derivable from reading any single document — each
+entry shown with the document that declared it (`declared_by`, `inventory`
+for the root), plus the aggregate scope's own (redacted) variable layer
+("The aggregate scope"). TARGET must be omitted; `--only NAME` narrows to one
+aggregate output, and naming a `scope: target` output with it is a config
+error. `--var` is rejected outright rather than silently ignored — group,
+target, and CLI-override variables are not part of the aggregate scope.
+`--show-secrets`/`--secrets` work exactly as they do for `inspect TARGET`.
+This mode never renders (no target loop, no prologue/epilogue application),
+so it keeps working even when no target contributes to an output or an
+epilogue `assert` would fail during a real render.
 
 ### Exit codes
 

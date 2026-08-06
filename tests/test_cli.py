@@ -1445,3 +1445,270 @@ targets:
     host_line = next(line for line in out.splitlines() if "source:" in line and "mark" in line)
     assert "(target " not in pre_line
     assert "(target t1)" in host_line
+
+
+# --- inspect --aggregate (README.md "Aggregate outputs") --------------------
+
+
+def test_inspect_aggregate_effective_order_and_declared_by(
+    closure_from_tree, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The effective prologue/epilogue order concatenates across every
+    document in the import closure, in closure order (dependencies before
+    their importer, the inventory last) -- not derivable from any single
+    document. This also covers attribution: the root's epilogue entry names
+    `extra:extra-epi` (module `extra`'s own fragment) via a qualified
+    reference, so its `ref` and the module `extra`'s own epilogue entry
+    display identically (`extra:extra-epi`) even though one is declared by
+    `extra` and the other by the inventory -- proving `declared_by` cannot be
+    derived from `Ref.module`."""
+    closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+imports:
+  extra: modules/extra
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+aggregate:
+  outputs:
+    combined:
+      prologue: [root-pre]
+      epilogue: [extra:extra-epi]
+targets:
+  t1:
+    variables: {}
+""",
+            "modules/extra/yaml-frag.yaml": """
+version: 1
+aggregate:
+  outputs:
+    combined:
+      prologue: [extra-pre]
+      epilogue: [extra-epi]
+""",
+        }
+    )
+    exit_code = main(
+        ["inspect", "--aggregate", "--inventory", str(tmp_path / "targets.yaml")]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    out = capsys.readouterr().out
+
+    extra_pre = out.index("- ref: extra:extra-pre\n        declared_by: extra")
+    root_pre = out.index("- ref: root-pre\n        declared_by: inventory")
+    assert extra_pre < root_pre, "prologue must list extra's contribution before the root's"
+
+    extra_epi = out.index("- ref: extra:extra-epi\n        declared_by: extra")
+    root_epi = out.index("- ref: extra:extra-epi\n        declared_by: inventory")
+    assert extra_epi < root_epi, "epilogue must list extra's contribution before the root's"
+    # Both epilogue entries resolve to the SAME Ref (module `extra`), yet carry
+    # different declared_by -- the case that rules out deriving attribution
+    # from Ref.module alone.
+
+
+def test_inspect_aggregate_variables_layer_is_redacted(
+    closure_from_tree, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`inspect --aggregate` shows the layered, redacted
+    defaults+aggregate variable map, and never shows the per-output
+    `output` variable (it has no single value across outputs)."""
+    closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+defaults:
+  variables:
+    plain_var: visible
+aggregate:
+  variables:
+    aggregate_secret_token: hush
+targets:
+  t1:
+    variables: {}
+""",
+        }
+    )
+    exit_code = main(
+        ["inspect", "--aggregate", "--inventory", str(tmp_path / "targets.yaml")]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    out = capsys.readouterr().out
+    assert "plain_var: visible" in out
+    assert "aggregate_secret_token: <redacted>" in out
+    assert "hush" not in out
+    assert "output:" not in out
+
+
+def test_inspect_aggregate_rejects_target(repo_root: Path) -> None:
+    """TARGET together with --aggregate is a config error."""
+    exit_code = main(
+        [
+            "inspect",
+            "gb10-01",
+            "--aggregate",
+            "--inventory",
+            str(repo_root / "example" / "targets.yaml"),
+        ]
+    )
+    assert exit_code == ExitCode.MODULE_ERROR
+
+
+def test_inspect_requires_target_or_aggregate(repo_root: Path) -> None:
+    """Neither TARGET nor --aggregate is the same config error `inspect` has
+    always raised for a missing TARGET."""
+    exit_code = main(["inspect", "--inventory", str(repo_root / "example" / "targets.yaml")])
+    assert exit_code == ExitCode.MODULE_ERROR
+
+
+def test_inspect_aggregate_rejects_var(repo_root: Path) -> None:
+    """--var has no effect in the aggregate scope (group/target/CLI
+    variables are explicitly out of scope there), so it must be rejected
+    rather than silently ignored."""
+    exit_code = main(
+        [
+            "inspect",
+            "--aggregate",
+            "--var",
+            "identity_username=someone-else",
+            "--inventory",
+            str(repo_root / "example" / "targets.yaml"),
+        ]
+    )
+    assert exit_code == ExitCode.MODULE_ERROR
+
+
+def test_inspect_aggregate_only_rejects_target_scoped_output(repo_root: Path) -> None:
+    """--only naming a `scope: target` output is a config error in
+    aggregate mode -- it has no prologue/epilogue to show."""
+    exit_code = main(
+        [
+            "inspect",
+            "--aggregate",
+            "--only",
+            "user-data",
+            "--inventory",
+            str(repo_root / "example" / "targets.yaml"),
+        ]
+    )
+    assert exit_code == ExitCode.MODULE_ERROR
+
+
+def test_inspect_aggregate_only_narrows_to_one_output(
+    repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--only NAME narrows aggregate mode to a single named output."""
+    exit_code = main(
+        [
+            "inspect",
+            "--aggregate",
+            "--only",
+            "ansible-inventory",
+            "--inventory",
+            str(repo_root / "example" / "targets.yaml"),
+        ]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    out = capsys.readouterr().out
+    assert "ansible-inventory:" in out
+    assert "ansible:ansible/checks" in out
+
+
+def test_inspect_aggregate_no_aggregate_block_is_empty_not_an_error(
+    closure_from_tree, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A closure with no `aggregate:` block anywhere, and no `scope:
+    aggregate` output either, produces a sensible empty listing rather than
+    an error."""
+    closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  main:
+    path: "out/{target}.yaml"
+targets:
+  t1:
+    variables: {}
+""",
+        }
+    )
+    exit_code = main(
+        ["inspect", "--aggregate", "--inventory", str(tmp_path / "targets.yaml")]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    out = capsys.readouterr().out
+    assert "outputs: {}" in out
+
+
+def test_inspect_aggregate_works_when_epilogue_assertion_would_fail(
+    closure_from_tree, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`inspect --aggregate` never composes the document, so it keeps
+    working even when an epilogue `assert` would raise during a real
+    render -- the whole point of not rendering (README.md "Aggregate
+    outputs"). No fragment file is even created on disk here: identity
+    resolution of a prologue/epilogue reference never loads the fragment
+    it names."""
+    closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+aggregate:
+  outputs:
+    combined:
+      epilogue: [would-fail-if-rendered]
+targets:
+  t1:
+    variables: {}
+""",
+        }
+    )
+    exit_code = main(
+        ["inspect", "--aggregate", "--inventory", str(tmp_path / "targets.yaml")]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    out = capsys.readouterr().out
+    assert "would-fail-if-rendered" in out
+
+
+def test_inspect_aggregate_works_when_no_target_contributes(
+    closure_from_tree, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`inspect --aggregate` still lists prologue/epilogue even when no
+    target routes anything into the output -- rendering would early-return
+    `None` for this output, but this mode does not render."""
+    closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+aggregate:
+  outputs:
+    combined:
+      prologue: [unattended]
+targets:
+  t1:
+    variables: {}
+""",
+        }
+    )
+    exit_code = main(
+        ["inspect", "--aggregate", "--inventory", str(tmp_path / "targets.yaml")]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    out = capsys.readouterr().out
+    assert "unattended" in out

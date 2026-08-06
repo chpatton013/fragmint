@@ -307,29 +307,15 @@ class RenderSession:
 
     def _aggregate_sources(self) -> dict[str, VariableSource]:
         """The aggregate scope's layered variable sources (README.md
-        "Variable precedence" — "The aggregate scope"): every module's and
-        the inventory's ``defaults.variables`` (closure order), then every
-        ``aggregate.variables`` (closure order, later wins), each parsed
+        "Variable precedence" — "The aggregate scope"), each parsed
         (structural validation only — no secret lookup, no subprocess),
-        memoized for the life of the session. Raises
-        :class:`~yaml_frag.errors.InventoryError` if either layer defines the
-        reserved ``target``/``output`` name. Only called when some output's
+        memoized for the life of the session. Only called when some output's
         prologue/epilogue actually needs the aggregate scope — a closure with
         no ``aggregate:`` block, or one whose outputs use no prologue/
         epilogue, never triggers this check or any resolution.
         """
         if self._aggregate_source_map is None:
-            layered: Variables = dict(self.project.default_variables)
-            layered.update(self.project.aggregate_variables)
-            reserved_conflicts = RESERVED_VARIABLE_NAMES & layered.keys()
-            if reserved_conflicts:
-                raise InventoryError(
-                    f"aggregate scope: variable name(s) "
-                    f"{', '.join(f'`{name}`' for name in sorted(reserved_conflicts))} "
-                    f"are reserved (`target` is undefined in this scope; `output` is "
-                    f"set to the aggregate output's own name) and must not be defined "
-                    f"in defaults/aggregate variables"
-                )
+            layered = layered_aggregate_variables(self.project)
             self._aggregate_source_map = {
                 name: sources.parse_source(raw) for name, raw in layered.items()
             }
@@ -753,6 +739,33 @@ def write_output(text: str, path: Path) -> Path:
     return path
 
 
+def layered_aggregate_variables(project: Project) -> Variables:
+    """The aggregate scope's layered, UNRESOLVED variable map (README.md
+    "Variable precedence" — "The aggregate scope"): every module's and the
+    inventory's ``defaults.variables`` (closure order), then every
+    ``aggregate.variables`` (closure order), later wins. Raises
+    :class:`~yaml_frag.errors.InventoryError` if either layer defines the
+    reserved ``target``/``output`` name — `target` is undefined in this
+    scope, and `output` is set per aggregate output to that output's own
+    name, so neither may be a real variable definition. Shared by
+    :meth:`RenderSession._aggregate_sources` (which then parses each value
+    into a :class:`~yaml_frag.models.VariableSource`) and ``inspect
+    --aggregate`` (which instead redacts and displays this layer directly,
+    unresolved, so the check fires identically in both places)."""
+    layered: Variables = dict(project.default_variables)
+    layered.update(project.aggregate_variables)
+    reserved_conflicts = RESERVED_VARIABLE_NAMES & layered.keys()
+    if reserved_conflicts:
+        raise InventoryError(
+            f"aggregate scope: variable name(s) "
+            f"{', '.join(f'`{name}`' for name in sorted(reserved_conflicts))} "
+            f"are reserved (`target` is undefined in this scope; `output` is "
+            f"set to the aggregate output's own name) and must not be defined "
+            f"in defaults/aggregate variables"
+        )
+    return layered
+
+
 def redact_variables(variables: Variables, *, show_secrets: bool = False) -> Variables:
     """Return a copy of ``variables`` with secret-looking values redacted.
 
@@ -782,6 +795,7 @@ __all__ = [
     "REDACT_SUBSTRINGS",
     "RenderSession",
     "compose_output",
+    "layered_aggregate_variables",
     "redact_variables",
     "render_target",
     "resolve_aggregate_output_path",

@@ -809,6 +809,62 @@ def _flatten_aggregate(
     return variables, output_fragments
 
 
+@dataclass(frozen=True)
+class AggregateFragmentEntry:
+    """One flattened prologue/epilogue fragment reference plus the document
+    that declared it.
+
+    :class:`~yaml_frag.models.AggregateFragments` (what :func:`flatten`
+    produces) holds only the resolved :class:`Ref`, which is enough to
+    render but not enough to attribute the fragment to whoever wrote the
+    ``prologue``/``epilogue`` entry — a module may write
+    ``epilogue: [other:frag]``, in which case ``ref.module`` names where the
+    fragment *lives*, not who declared the reference. ``declared_by`` is the
+    declaring document's closure-assigned name, or ``None`` for the
+    inventory (the root). Used by ``inspect --aggregate`` (README.md
+    "Aggregate outputs")."""
+
+    ref: Ref
+    declared_by: str | None
+
+
+def aggregate_fragment_details(
+    closure: Closure, outputs: dict[str, OutputSpec]
+) -> dict[str, tuple[tuple[AggregateFragmentEntry, ...], tuple[AggregateFragmentEntry, ...]]]:
+    """Re-walk the closure's ``aggregate.outputs.*`` declarations, exactly as
+    :func:`_flatten_aggregate` does, but keep each entry's declaring document
+    instead of discarding it.
+
+    Returns, for every output in ``outputs`` whose ``scope`` is
+    ``"aggregate"``, a ``(prologue, epilogue)`` pair of entries in the same
+    closure-order-concatenated sequence :func:`_flatten_aggregate` produces —
+    an output with no prologue/epilogue anywhere in the closure still appears,
+    with two empty tuples. Assumes ``outputs`` already passed
+    :func:`_flatten_aggregate`'s validation (an undefined or wrongly scoped
+    ``aggregate.outputs`` entry would have failed closed there first)."""
+    prologue: dict[str, list[AggregateFragmentEntry]] = {}
+    epilogue: dict[str, list[AggregateFragmentEntry]] = {}
+    for doc in closure.documents:
+        for output_name, raw_aggregate in doc.aggregate_output_fragments.items():
+            prologue.setdefault(output_name, []).extend(
+                AggregateFragmentEntry(
+                    resolve_ref(ref, declaring=doc, closure=closure), doc.name
+                )
+                for ref in raw_aggregate.prologue
+            )
+            epilogue.setdefault(output_name, []).extend(
+                AggregateFragmentEntry(
+                    resolve_ref(ref, declaring=doc, closure=closure), doc.name
+                )
+                for ref in raw_aggregate.epilogue
+            )
+    return {
+        name: (tuple(prologue.get(name, ())), tuple(epilogue.get(name, ())))
+        for name, spec in outputs.items()
+        if spec.scope == "aggregate"
+    }
+
+
 def flatten(closure: Closure) -> Project:
     """Flatten a loaded :class:`Closure` into one closure-wide
     :class:`~yaml_frag.models.Project`.
@@ -858,8 +914,10 @@ def flatten(closure: Closure) -> Project:
 __all__ = [
     "INVENTORY_FILENAME",
     "MODULE_FILENAME",
+    "AggregateFragmentEntry",
     "Closure",
     "Document",
+    "aggregate_fragment_details",
     "display_ref",
     "flatten",
     "fragment_path",

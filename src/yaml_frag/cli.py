@@ -870,31 +870,125 @@ def list_fragments(inventory_path: Path | None, fragments_dir_override: tuple[Pa
             click.echo(modules_mod.display_ref(Ref(module=doc.name, path=name)))
 
 
+def _declared_by_label(name: str | None) -> str:
+    """The label `inspect --aggregate` prints for an entry's declaring
+    document -- ``"inventory"`` for the root, else its module name. Matches
+    the convention `list outputs`/`list modules` already use for the same
+    root-vs-module distinction."""
+    return "inventory" if name is None else name
+
+
+def _check_only_is_aggregate(project: Project, only: str | None) -> None:
+    """For ``inspect --aggregate``, ``--only`` must name a ``scope:
+    aggregate`` output -- a ``scope: target`` output has no prologue/epilogue
+    to show. Assumes ``only`` has already been checked against
+    ``project.outputs`` by :func:`_check_only_output`."""
+    if only is not None and project.outputs[only].scope != "aggregate":
+        raise ModuleError(
+            f"output {only!r} has scope `target`; `inspect --aggregate` covers "
+            f"only `scope: aggregate` outputs"
+        )
+
+
 @cli.command()
-@click.argument("target")
+@click.argument("target", required=False)
 @_inventory_option
 @_fragments_option
 @_secrets_option
 @_var_option
+@_only_option
+@click.option(
+    "--aggregate",
+    "aggregate_mode",
+    is_flag=True,
+    help="Show the aggregate scope instead of one target: effective prologue/"
+    "epilogue order (with each entry's declaring document) and the "
+    "(redacted) aggregate variable layer. TARGET must be omitted.",
+)
 @click.option("--show-secrets", is_flag=True, help="Do not redact secret-looking values (unsafe).")
 def inspect(
-    target: str,
+    target: str | None,
     inventory_path: Path | None,
     fragments_dir_override: tuple[Path | None, dict[str, Path]],
     secrets_path: Path | None,
     cli_variables: dict[str, str],
+    only_output: str | None,
+    aggregate_mode: bool,
     show_secrets: bool,
 ) -> None:
     """Show resolved groups, per-output fragment order (qualified refs), and
-    (redacted) variables.
+    (redacted) variables for TARGET.
 
-    See README.md "CLI usage".
+    ``--aggregate`` switches to the target-less aggregate scope instead:
+    every aggregate output's effective prologue/epilogue order -- the
+    closure-order concatenation across every document that contributes one,
+    not derivable by reading any single document -- each entry naming its
+    declaring document, plus the (redacted) aggregate variable layer.
+    TARGET and ``--aggregate`` are mutually exclusive; ``--var`` has no effect
+    in the aggregate scope (README.md "The aggregate scope") and is rejected
+    rather than silently ignored. See README.md "CLI usage".
     """
+    if aggregate_mode:
+        if target is not None:
+            raise ModuleError("TARGET and --aggregate cannot be combined")
+        if cli_variables:
+            raise ModuleError(
+                "--var has no effect with --aggregate: group, target, and "
+                "CLI-override variables are not part of the aggregate scope "
+                "(README.md \"The aggregate scope\")"
+            )
+    elif target is None:
+        raise ModuleError("TARGET is required unless --aggregate is given")
+    elif only_output is not None:
+        raise ModuleError("--only requires --aggregate; per-target inspect always shows every output")
+
     closure = _load_closure(inventory_path, fragments_dir_override)
     project = modules_mod.flatten(closure)
-    resolved = inventory_mod.resolve_target(project, target, cli_variables=cast(Variables, cli_variables))
+    _check_only_output(project, only_output)
 
-    redacted_variables: Variables = render_mod.redact_variables(
+    if aggregate_mode:
+        _check_only_is_aggregate(project, only_output)
+        details = modules_mod.aggregate_fragment_details(closure, project.outputs)
+        if only_output is not None:
+            details = {only_output: details[only_output]}
+
+        def _entries_doc(entries: tuple[modules_mod.AggregateFragmentEntry, ...]) -> YamlValue:
+            return cast(
+                YamlValue,
+                [
+                    {
+                        "ref": modules_mod.display_ref(entry.ref),
+                        "declared_by": _declared_by_label(entry.declared_by),
+                    }
+                    for entry in entries
+                ],
+            )
+
+        redacted_variables = render_mod.redact_variables(
+            render_mod.layered_aggregate_variables(project), show_secrets=show_secrets
+        )
+        aggregate_doc: dict[str, YamlValue] = {
+            "scope": "aggregate",
+            "outputs": cast(
+                YamlValue,
+                {
+                    name: {
+                        "prologue": _entries_doc(prologue),
+                        "epilogue": _entries_doc(epilogue),
+                    }
+                    for name, (prologue, epilogue) in details.items()
+                },
+            ),
+            "variables": cast(YamlValue, redacted_variables),
+        }
+        click.echo(yamlio.dump_str(aggregate_doc), nl=False)
+        return
+
+    resolved = inventory_mod.resolve_target(
+        project, cast(str, target), cli_variables=cast(Variables, cli_variables)
+    )
+
+    redacted_variables = render_mod.redact_variables(
         resolved.variables, show_secrets=show_secrets
     )
     output_doc: dict[str, YamlValue] = {
