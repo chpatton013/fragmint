@@ -682,6 +682,40 @@ targets:
     assert tomllib.loads(text) == {}
 
 
+# --- Output templates on non-YAML formats (README.md "Serialization") ------
+
+
+def test_output_template_prepends_comment_banner_to_toml_output(tmp_path: Path) -> None:
+    template = tmp_path / "banner.tmpl"
+    template.write_text("# generated\n{{ document }}")
+    result = RenderedOutput(name="main", document={"a": 1}, provenance={}, overrides=())
+    output = OutputSpec(path="out.toml", template=str(template), format="toml")
+    text = render_mod.compose_output(result, output)
+    assert text.startswith("# generated\n")
+    assert tomllib.loads(text) == {"a": 1}
+
+
+def test_output_template_producing_invalid_json_fails_closed(tmp_path: Path) -> None:
+    template = tmp_path / "banner.tmpl"
+    template.write_text("// not valid JSON\n{{ document }}")
+    result = RenderedOutput(name="main", document={"a": 1}, provenance={}, overrides=())
+    output = OutputSpec(path="out.json", template=str(template), format="json")
+    with pytest.raises(SerializationError) as excinfo:
+        render_mod.compose_output(result, output)
+    assert str(template) in str(excinfo.value)
+
+
+def test_output_template_on_yaml_output_is_not_round_trip_checked(tmp_path: Path) -> None:
+    """Pins the deliberate asymmetry: a YAML template inserting non-comment
+    prose is not an error, unlike the same shape on json/toml."""
+    template = tmp_path / "banner.tmpl"
+    template.write_text("not valid yaml prose that breaks parsing: [\n{{ document }}")
+    result = RenderedOutput(name="main", document={"a": 1}, provenance={}, overrides=())
+    output = OutputSpec(path="out.yaml", template=str(template), format="yaml")
+    text = render_mod.compose_output(result, output)
+    assert "not valid yaml prose" in text
+
+
 # --- Aggregate outputs (README.md "Aggregate outputs") ----------------------
 
 

@@ -736,6 +736,17 @@ def compose_output(result: RenderedOutput, output: OutputSpec) -> str:
     works identically for a per-target or an aggregate result (README.md
     "Aggregate outputs": the aggregate path adds no new serialization or
     templating code).
+
+    A template is format-neutral text, not something this function parses,
+    so for ``format: json`` and ``format: toml`` outputs ONLY, a templated
+    result is re-parsed and required to equal ``result.document`` — the
+    fail-closed answer to a template that would otherwise silently produce
+    invalid or data-changing output (a JSON template can't add anything but
+    whitespace and stay valid; a TOML template can add a comment banner
+    safely, but not much else). YAML has no such check, deliberately: a YAML
+    template that inserts non-comment prose already produces a file the tool
+    never re-reads, and making that an error now would break existing
+    projects for no requirement this feature introduces.
     """
     try:
         text = formats.dump_document(result.document, output.format)
@@ -748,7 +759,26 @@ def compose_output(result: RenderedOutput, output: OutputSpec) -> str:
     else:
         composed = text
 
-    return composed.rstrip("\n") + "\n"
+    composed = composed.rstrip("\n") + "\n"
+
+    if output.template and output.format in ("json", "toml"):
+        try:
+            reparsed = formats.parse_text(
+                composed, output.format, path=Path(output.template)
+            )
+        except FragmintError as exc:
+            raise SerializationError(
+                f"[{result.name}] output template {output.template!r} produces "
+                f"invalid {output.format}: {exc}"
+            ) from exc
+        if reparsed != result.document:
+            raise SerializationError(
+                f"[{result.name}] output template {output.template!r} changes "
+                f"the {output.format} document when applied — templates may add "
+                f"only comments/whitespace for this format"
+            )
+
+    return composed
 
 
 def write_output(text: str, path: Path) -> Path:
