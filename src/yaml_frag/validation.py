@@ -91,8 +91,8 @@ def validate_against_schema(document: YamlValue, schema_path: Path) -> None:
 def run_validator(output_path: Path, command: tuple[str, ...]) -> None:
     """Run a named external validator against the written output file.
 
-    ``command`` comes from a project-config validator entry (README.md
-    "Validation": named validators), e.g.
+    ``command`` comes from a ``validators`` entry in any document in the
+    closure (README.md "Validation": named validators), e.g.
     ``("python3", "tools/validate-autoinstall-user-data.py")``.
     The rendered output path is passed as the final argument. Raise
     :class:`~yaml_frag.errors.ValidationError` on nonzero exit, including

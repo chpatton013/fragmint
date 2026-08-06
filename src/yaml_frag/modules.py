@@ -177,10 +177,10 @@ def display_ref(ref: Ref) -> str:
 class _RawOutput:
     """One document's own ``outputs.<name>`` entry, prior to closure-wide
     resolution. ``path`` is already anchored to the declaring document's
-    directory (it is not a reference, just a document-relative path, exactly
-    like today's project-config paths); ``template``/``schema`` are left as
-    written (bare or qualified) since resolving them may require the whole
-    closure (a qualified reference into another module)."""
+    directory (it is not a reference, just a document-relative path);
+    ``template``/``schema`` are left as written (bare or qualified) since
+    resolving them may require the whole closure (a qualified reference into
+    another module)."""
 
     path: str
     template: str | None

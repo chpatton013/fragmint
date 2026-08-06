@@ -43,11 +43,12 @@ This README is the authoritative reference for the tool's design and usage.
   contains unresolved template expressions, or a configured validator reports
   failure. Assertions such as "the document must contain
   `autoinstall.version: 1`" are **not** built in — they're declared by the
-  project's fragments (see `example/fragments/autoinstall/checks.yaml`).
-- **Human-readable source files.** Inventory, fragment, and project-config
-  files are meant to be easy to review in Git. Avoid embedding large amounts
-  of Python or arbitrary executable logic in YAML; use Jinja-style variable
-  substitution for values, but keep control flow minimal.
+  project's fragments (see
+  `example/modules/autoinstall/fragments/autoinstall/checks.yaml`).
+- **Human-readable source files.** Inventory, module, and fragment files are
+  meant to be easy to review in Git. Avoid embedding large amounts of Python or
+  arbitrary executable logic in YAML; use Jinja-style variable substitution for
+  values, but keep control flow minimal.
 - **Implementation preference.** Favor a small, unsurprising implementation
   over a highly abstract framework. The most important properties are:
   deterministic ordering; explicit list behavior; strict validation; good
