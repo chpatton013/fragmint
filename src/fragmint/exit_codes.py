@@ -36,3 +36,7 @@ class ExitCode(IntEnum):
     #: A variable value source could not be resolved (secret not found, or a
     #: capture subprocess failed).
     VARIABLE_RESOLUTION = 8
+    #: The rendered document cannot be serialized in the output's configured
+    #: format (a value the format cannot express, or an output template that
+    #: makes the composed text invalid in that format).
+    SERIALIZATION = 9

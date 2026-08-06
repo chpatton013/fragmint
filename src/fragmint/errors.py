@@ -110,3 +110,15 @@ class ValidationError(FragmintError):
     configured external validator."""
 
     exit_code = ExitCode.RENDERED_VALIDATION
+
+
+class SerializationError(FragmintError):
+    """The rendered document cannot be expressed in the output's configured
+    format: a value the format cannot represent (e.g. ``null`` for TOML, a
+    non-finite float for JSON), or an output template whose composed text is
+    no longer valid in that format. Distinct from :class:`ValidationError`:
+    the document may be structurally correct and still be inexpressible in
+    one particular target format. Messages name the output and the JSON
+    Pointer path of the offending value."""
+
+    exit_code = ExitCode.SERIALIZATION

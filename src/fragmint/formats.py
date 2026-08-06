@@ -28,11 +28,13 @@ from __future__ import annotations
 import datetime
 import io
 import json
+import math
 import tomllib
 from functools import cache
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
+import tomli_w
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 from ruamel.yaml.nodes import ScalarNode
@@ -40,7 +42,7 @@ from ruamel.yaml.resolver import VersionedResolver
 from ruamel.yaml.scalarstring import LiteralScalarString, SingleQuotedScalarString
 
 from . import pointer
-from .errors import FragmintError
+from .errors import FragmintError, SerializationError
 from .models import DataValue, Format
 
 #: Suffixes that select an output's serialization format when its `path`
@@ -174,9 +176,21 @@ class _YamlCodec:
 
 
 class _TomlCodec:
-    """TOML, read via the stdlib ``tomllib`` (no writer yet — see
-    :mod:`fragmint.errors`.``SerializationError`` and README.md
-    "Serialization")."""
+    """TOML, read via the stdlib ``tomllib`` and written via ``tomli_w``.
+
+    Determinism/diff-friendliness guarantees (README.md "Serialization"):
+    key ordering is preserved *within a table* for scalars, arrays, and
+    inline values, but TOML's own syntax requires a table's sub-tables and
+    arrays-of-tables to follow all of that table's scalar keys — the tool
+    never sorts keys, but cannot make TOML express an ordering its grammar
+    forbids. ``None`` has no TOML representation and fails closed, naming
+    the pointer, rather than being silently dropped or coerced. Multi-line
+    strings use TOML's ``\"\"\"`` form when lossless; a document containing a
+    bare ``\\r`` anywhere falls back to single-line escaped strings for
+    *every* string in the document, since ``tomli_w`` controls this per
+    document, not per string, and the fallback is exactly as lossless.
+    Exactly one trailing newline.
+    """
 
     name: Format = "toml"
 
@@ -189,7 +203,12 @@ class _TomlCodec:
         return _normalize(data)
 
     def dump(self, document: DataValue) -> str:
-        raise NotImplementedError("TOML output is not yet supported")
+        _reject_null(document, "", fmt="toml")
+        multiline = not _contains_carriage_return(document)
+        text = tomli_w.dumps(
+            cast(dict[str, Any], document), multiline_strings=multiline, indent=2
+        )
+        return text.rstrip("\n") + "\n"
 
 
 def _reject_toml_datetimes(node: Any, ptr: str, *, path: Path) -> None:
@@ -211,8 +230,62 @@ def _reject_toml_datetimes(node: Any, ptr: str, *, path: Path) -> None:
             _reject_toml_datetimes(item, pointer.join(ptr, str(index)), path=path)
 
 
+def _reject_null(node: Any, ptr: str, *, fmt: Format) -> None:
+    """TOML has no null. Raise :class:`~fragmint.errors.SerializationError`
+    naming the pointer and pointing at the actual remedy (``op: remove``)
+    rather than a generic "value not supported" message."""
+    if node is None:
+        raise SerializationError(
+            f"cannot serialize to {fmt}: null value at {ptr or '/'}; {fmt} has "
+            f"no null — remove the key instead, or use a different output format"
+        )
+    if isinstance(node, dict):
+        for key, value in node.items():
+            _reject_null(value, pointer.join(ptr, key), fmt=fmt)
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            _reject_null(item, pointer.join(ptr, str(index)), fmt=fmt)
+
+
+def _contains_carriage_return(node: Any) -> bool:
+    """True if any string value anywhere in ``node`` contains ``\\r`` — see
+    :meth:`_TomlCodec.dump`."""
+    if isinstance(node, str):
+        return "\r" in node
+    if isinstance(node, dict):
+        return any(_contains_carriage_return(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_contains_carriage_return(item) for item in node)
+    return False
+
+
+def _reject_non_finite_float(node: Any, ptr: str, *, fmt: Format) -> None:
+    """JSON has no ``NaN``/``Infinity``. Raise
+    :class:`~fragmint.errors.SerializationError` naming the pointer and the
+    offending value."""
+    if isinstance(node, float) and not math.isfinite(node):
+        raise SerializationError(
+            f"cannot serialize to {fmt}: non-finite float at {ptr or '/'} "
+            f"({node}); {fmt} cannot represent nan or infinity"
+        )
+    if isinstance(node, dict):
+        for key, value in node.items():
+            _reject_non_finite_float(value, pointer.join(ptr, key), fmt=fmt)
+    elif isinstance(node, list):
+        for index, item in enumerate(node):
+            _reject_non_finite_float(item, pointer.join(ptr, str(index)), fmt=fmt)
+
+
 class _JsonCodec:
-    """JSON, read and written via the stdlib ``json`` module."""
+    """JSON, read and written via the stdlib ``json`` module.
+
+    Determinism/diff-friendliness guarantees (README.md "Serialization"):
+    insertion order preserved (``sort_keys=False``); two-space indentation;
+    raw UTF-8 (``ensure_ascii=False``); exactly one trailing newline. A
+    non-finite float has no JSON representation and fails closed, naming the
+    pointer, before ``json.dumps`` (called with ``allow_nan=False`` as a
+    second line of defense) ever runs.
+    """
 
     name: Format = "json"
 
@@ -224,7 +297,11 @@ class _JsonCodec:
         return _normalize(data)
 
     def dump(self, document: DataValue) -> str:
-        raise NotImplementedError("JSON output is not yet supported")
+        _reject_non_finite_float(document, "", fmt="json")
+        text = json.dumps(
+            document, indent=2, ensure_ascii=False, allow_nan=False, sort_keys=False
+        )
+        return text.rstrip("\n") + "\n"
 
 
 _CODECS: dict[Format, Codec] = {

@@ -12,11 +12,14 @@ to contain an affected value), so these tests are its only guard.
 
 from __future__ import annotations
 
+import json
+import math
+import tomllib
 from pathlib import Path
 
 import pytest
 
-from fragmint.errors import FragmintError
+from fragmint.errors import FragmintError, SerializationError
 from fragmint.formats import (
     codec_for,
     dump_document,
@@ -188,3 +191,146 @@ def test_toml_load_rejects_date_nested_in_a_list_naming_the_pointer(tmp_path: Pa
     with pytest.raises(FragmintError) as excinfo:
         codec_for("toml").load("a = [1979-05-27]\n", path=tmp_path / "f.toml")
     assert "/a/0" in str(excinfo.value)
+
+
+# --- JSON: writing --------------------------------------------------------------
+
+
+def test_json_dump_uses_two_space_indent() -> None:
+    text = dump_document({"a": 1, "b": [1, 2]}, "json")
+    assert text == '{\n  "a": 1,\n  "b": [\n    1,\n    2\n  ]\n}\n'
+
+
+def test_json_dump_preserves_mapping_insertion_order() -> None:
+    text = dump_document({"z": 1, "a": 2}, "json")
+    assert text.index('"z"') < text.index('"a"')
+
+
+def test_json_dump_does_not_escape_non_ascii() -> None:
+    text = dump_document({"u": "héllo→"}, "json")
+    assert "héllo→" in text
+    assert "\\u" not in text
+
+
+def test_json_dump_ends_with_exactly_one_newline() -> None:
+    text = dump_document({"a": 1}, "json")
+    assert text.endswith("\n")
+    assert not text.endswith("\n\n")
+
+
+def test_json_dump_rejects_nan_naming_the_pointer() -> None:
+    with pytest.raises(SerializationError) as excinfo:
+        dump_document({"a": float("nan")}, "json")
+    assert "/a" in str(excinfo.value)
+
+
+def test_json_dump_rejects_infinity_naming_the_pointer() -> None:
+    with pytest.raises(SerializationError) as excinfo:
+        dump_document({"a": float("inf")}, "json")
+    assert "/a" in str(excinfo.value)
+
+
+def test_json_dump_rejects_non_finite_float_nested_in_a_list() -> None:
+    with pytest.raises(SerializationError) as excinfo:
+        dump_document({"a": [1, float("-inf")]}, "json")
+    assert "/a/1" in str(excinfo.value)
+
+
+def test_json_dump_round_trips_through_json_loads() -> None:
+    document = {"a": 1, "b": [1, "two", True, None], "c": {"nested": 3.5}}
+    text = dump_document(document, "json")
+    assert json.loads(text) == document
+
+
+# --- TOML: writing ---------------------------------------------------------------
+
+
+def test_toml_dump_round_trips_through_tomllib() -> None:
+    document = {"a": 1, "b": [1, 2, "three"], "c": {"nested": True}}
+    text = dump_document(document, "toml")
+    assert tomllib.loads(text) == document
+
+
+def test_toml_dump_is_byte_identical_across_repeated_calls() -> None:
+    document = {"a": 1, "b": {"x": 1, "y": 2}, "c": [1, 2, 3]}
+    texts = {dump_document(document, "toml") for _ in range(50)}
+    assert len(texts) == 1
+
+
+def test_toml_dump_preserves_scalar_key_order_within_a_table() -> None:
+    text = dump_document({"z": 1, "a": 2, "m": 3}, "toml")
+    assert text.index("z") < text.index("a") < text.index("m")
+
+
+def test_toml_dump_emits_subtables_after_a_tables_scalar_keys() -> None:
+    document = {"sub": {"x": 1}, "scalar": "value"}
+    text = dump_document(document, "toml")
+    assert text.index("scalar") < text.index("[sub]")
+
+
+def test_toml_dump_emits_list_of_mappings_as_array_of_tables() -> None:
+    # tomli_w only switches to `[[name]]` array-of-tables syntax when an
+    # inline rendering would not fit on one line; a long value forces that
+    # here so the assertion exercises the syntax this test names.
+    document = {"items": [{"a": 1, "b": "x" * 90}, {"a": 2, "b": "y" * 90}]}
+    text = dump_document(document, "toml")
+    assert "[[items]]" in text
+    assert tomllib.loads(text) == document
+
+
+def test_toml_dump_uses_multiline_strings_for_embedded_newlines() -> None:
+    document = {"a": "line one\nline two\n"}
+    text = dump_document(document, "toml")
+    assert '"""' in text
+    assert tomllib.loads(text) == document
+
+
+def test_toml_dump_falls_back_to_single_line_strings_when_a_value_contains_cr() -> None:
+    document = {"a": "line one\nline two\n", "b": "has\rcr"}
+    text = dump_document(document, "toml")
+    assert '"""' not in text
+
+
+def test_toml_dump_carriage_return_fallback_round_trips_exactly() -> None:
+    document = {"a": "line one\nline two\n", "b": "has\r\ncrlf\r\n"}
+    text = dump_document(document, "toml")
+    assert tomllib.loads(text) == document
+
+
+def test_toml_dump_rejects_null_naming_the_pointer() -> None:
+    with pytest.raises(SerializationError) as excinfo:
+        dump_document({"a": None}, "toml")
+    assert "/a" in str(excinfo.value)
+
+
+def test_toml_dump_rejects_null_nested_in_a_mapping_naming_the_pointer() -> None:
+    with pytest.raises(SerializationError) as excinfo:
+        dump_document({"a": {"b": None}}, "toml")
+    assert "/a/b" in str(excinfo.value)
+
+
+def test_toml_dump_rejects_null_inside_a_list_naming_the_pointer() -> None:
+    with pytest.raises(SerializationError) as excinfo:
+        dump_document({"a": [1, None]}, "toml")
+    assert "/a/1" in str(excinfo.value)
+
+
+def test_toml_dump_accepts_non_finite_floats() -> None:
+    document = {"a": float("nan"), "b": float("inf"), "c": float("-inf")}
+    text = dump_document(document, "toml")
+    loaded = tomllib.loads(text)
+    assert math.isnan(loaded["a"])
+    assert loaded["b"] == float("inf")
+    assert loaded["c"] == float("-inf")
+
+
+def test_toml_dump_escapes_keys_that_need_it() -> None:
+    document = {"has space": 1, "a.b": 2, "": 3}
+    text = dump_document(document, "toml")
+    assert tomllib.loads(text) == document
+
+
+def test_toml_dump_pointer_uses_json_pointer_escaping() -> None:
+    with pytest.raises(SerializationError) as excinfo:
+        dump_document({"a/b": None}, "toml")
+    assert "/a~1b" in str(excinfo.value)
