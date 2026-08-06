@@ -37,7 +37,7 @@ from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 from ruamel.yaml.scalarstring import LiteralScalarString
 
-from .errors import YamlFragError
+from .errors import FragmintError
 from .models import YamlValue
 
 _load_yaml = YAML(typ="safe")
@@ -60,18 +60,18 @@ def _normalize(node: Any) -> YamlValue:
 def load_file(path: Path) -> YamlValue:
     """Parse a single YAML document from ``path``.
 
-    Raise :class:`~yaml_frag.errors.YamlFragError` (or the most specific
+    Raise :class:`~fragmint.errors.FragmintError` (or the most specific
     applicable subclass at the call site) on parse failure, with the file path
     included in the message.
     """
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
-        raise YamlFragError(f"cannot read YAML file {path}: {exc}") from exc
+        raise FragmintError(f"cannot read YAML file {path}: {exc}") from exc
     try:
         data = _load_yaml.load(text)
     except YAMLError as exc:
-        raise YamlFragError(f"invalid YAML in {path}: {exc}") from exc
+        raise FragmintError(f"invalid YAML in {path}: {exc}") from exc
     return _normalize(data)
 
 

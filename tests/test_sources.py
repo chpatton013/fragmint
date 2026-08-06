@@ -7,14 +7,14 @@ from __future__ import annotations
 
 import pytest
 
-from yaml_frag.errors import CaptureError, SecretNotFoundError
-from yaml_frag.models import (
+from fragmint.errors import CaptureError, SecretNotFoundError
+from fragmint.models import (
     CaptureSource,
     LiteralSource,
     SecretSource,
     SecretStore,
 )
-from yaml_frag.sources import (
+from fragmint.sources import (
     describe_source,
     is_source,
     parse_source,

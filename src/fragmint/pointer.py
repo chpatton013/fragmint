@@ -17,7 +17,7 @@ tests).
 
 from __future__ import annotations
 
-from .errors import MergeConflictError, YamlFragError
+from .errors import FragmintError, MergeConflictError
 from .models import YamlValue
 
 
@@ -32,13 +32,13 @@ def parse_pointer(pointer: str) -> tuple[str, ...]:
     ``"/"`` and ``""`` both denote the root and return ``()``.
     ``"/a/b~1c"`` returns ``("a", "b/c")``.
 
-    Raises :class:`~yaml_frag.errors.YamlFragError` if the pointer does not
+    Raises :class:`~fragmint.errors.FragmintError` if the pointer does not
     start with ``/`` and is not empty.
     """
     if pointer in ("", "/"):
         return ()
     if not pointer.startswith("/"):
-        raise YamlFragError(
+        raise FragmintError(
             f"invalid JSON Pointer {pointer!r}: must start with '/' or be empty"
         )
     return tuple(_decode_token(token) for token in pointer[1:].split("/"))
@@ -67,7 +67,7 @@ def set_(document: dict[str, YamlValue], pointer: str, value: YamlValue) -> None
 
     Mutates ``document`` in place. Used by the ``set`` operation (README.md
     "Merge operations"). If an existing intermediate node is a non-mapping,
-    raise :class:`~yaml_frag.errors.MergeConflictError`.
+    raise :class:`~fragmint.errors.MergeConflictError`.
     """
     tokens = parse_pointer(pointer)
     if not tokens:
@@ -102,7 +102,7 @@ def delete(document: dict[str, YamlValue], pointer: str, *, missing_ok: bool) ->
 
     Return ``True`` if something was removed. If the path is absent and
     ``missing_ok`` is ``False``, raise
-    :class:`~yaml_frag.errors.YamlFragError`; if ``True``, return
+    :class:`~fragmint.errors.FragmintError`; if ``True``, return
     ``False``. Used by the ``remove`` operation (README.md "Merge operations").
     """
     tokens = parse_pointer(pointer)
@@ -116,13 +116,13 @@ def delete(document: dict[str, YamlValue], pointer: str, *, missing_ok: bool) ->
         if not isinstance(node, dict) or token not in node:
             if missing_ok:
                 return False
-            raise YamlFragError(f"cannot remove {pointer}: path does not exist")
+            raise FragmintError(f"cannot remove {pointer}: path does not exist")
         node = node[token]
 
     last = tokens[-1]
     if not isinstance(node, dict) or last not in node:
         if missing_ok:
             return False
-        raise YamlFragError(f"cannot remove {pointer}: path does not exist")
+        raise FragmintError(f"cannot remove {pointer}: path does not exist")
     del node[last]
     return True

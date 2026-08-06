@@ -13,8 +13,8 @@ from pathlib import Path
 
 import pytest
 
-from yaml_frag import render as render_mod
-from yaml_frag.errors import (
+from fragmint import render as render_mod
+from fragmint.errors import (
     AssertionFailedError,
     CaptureError,
     ModuleError,
@@ -22,7 +22,7 @@ from yaml_frag.errors import (
     TemplateRenderError,
     ValidationError,
 )
-from yaml_frag.models import OutputSpec
+from fragmint.models import OutputSpec
 
 SNAPSHOT_TARGETS = ["generic-vm-01", "gb10-01", "gb10-02"]
 
@@ -453,7 +453,7 @@ def test_redact_variables_secret_source_shown_regardless_of_name() -> None:
 
 
 def test_compose_output_ends_with_single_trailing_newline() -> None:
-    from yaml_frag.models import RenderedOutput
+    from fragmint.models import RenderedOutput
 
     result = RenderedOutput(name="main", document={"a": 1}, provenance={}, overrides=())
     output = OutputSpec(path="rendered/{target}", template=None)
@@ -1505,7 +1505,7 @@ operations:
 def test_target_variable_is_undefined_in_aggregate_scope(closure_from_tree, stub_runner) -> None:
     """`{{ target }}` in an epilogue fragment raises TemplateRenderError,
     naming the aggregate epilogue scope label."""
-    from yaml_frag.errors import TemplateRenderError
+    from fragmint.errors import TemplateRenderError
 
     closure = closure_from_tree(
         {
@@ -1556,7 +1556,7 @@ operations:
 def test_required_target_variable_in_aggregate_scope_fails_closed(
     closure_from_tree, stub_runner
 ) -> None:
-    from yaml_frag.errors import TemplateRenderError
+    from fragmint.errors import TemplateRenderError
 
     closure = closure_from_tree(
         {
@@ -1710,7 +1710,7 @@ operations:
 def test_aggregate_scope_rejects_reserved_variable_names(
     closure_from_tree, stub_runner, reserved_name: str
 ) -> None:
-    from yaml_frag.errors import InventoryError
+    from fragmint.errors import InventoryError
 
     closure = closure_from_tree(
         {
@@ -1990,7 +1990,7 @@ operations:
     path: /log
     value: ["{{ target }}"]
 """,
-            "modules/a/yaml-frag.yaml": """
+            "modules/a/fragmint.yaml": """
 version: 1
 aggregate:
   outputs:

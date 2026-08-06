@@ -5,9 +5,9 @@ that contains enough context to find the source file and operation (target
 name, fragment name, operation index, path, variable name, as applicable).
 See README.md "Design principles" (fail closed).
 
-Each concrete exception declares the :class:`~yaml_frag.exit_codes.ExitCode`
+Each concrete exception declares the :class:`~fragmint.exit_codes.ExitCode`
 the CLI should return when it propagates to the top level. The CLI is expected
-to catch :class:`YamlFragError`, print ``str(exc)`` to stderr, and exit with
+to catch :class:`FragmintError`, print ``str(exc)`` to stderr, and exit with
 ``exc.exit_code``.
 """
 
@@ -16,8 +16,8 @@ from __future__ import annotations
 from .exit_codes import ExitCode
 
 
-class YamlFragError(Exception):
-    """Base class for all yaml-frag errors.
+class FragmintError(Exception):
+    """Base class for all fragmint errors.
 
     Subclasses set :attr:`exit_code`. Message text is the user-facing
     diagnostic and should already include actionable source context.
@@ -26,7 +26,7 @@ class YamlFragError(Exception):
     exit_code: ExitCode = ExitCode.RENDER_FAILURE
 
 
-class ModuleError(YamlFragError):
+class ModuleError(FragmintError):
     """A module or inventory document is missing, malformed, internally
     inconsistent, or its import closure is invalid (name collision, aliasing,
     a cycle, an undefined output, a containment violation, and the like)."""
@@ -34,7 +34,7 @@ class ModuleError(YamlFragError):
     exit_code = ExitCode.MODULE_ERROR
 
 
-class InventoryError(YamlFragError):
+class InventoryError(FragmintError):
     """The inventory file is malformed or internally inconsistent."""
 
     exit_code = ExitCode.INVENTORY_VALIDATION
@@ -50,13 +50,13 @@ class UnknownFragmentError(InventoryError):
     exit_code = ExitCode.FRAGMENT_VALIDATION
 
 
-class FragmentError(YamlFragError):
+class FragmentError(FragmintError):
     """A fragment file is malformed or fails fragment-schema validation."""
 
     exit_code = ExitCode.FRAGMENT_VALIDATION
 
 
-class VariableResolutionError(YamlFragError):
+class VariableResolutionError(FragmintError):
     """A variable value source could not be resolved.
 
     Base for secret-lookup and capture-subprocess failures. Messages must name
@@ -78,25 +78,25 @@ class CaptureError(VariableResolutionError):
     secret-sourced arguments redacted."""
 
 
-class TemplateRenderError(YamlFragError):
+class TemplateRenderError(FragmintError):
     """Template substitution failed (e.g. a strictly-undefined variable)."""
 
     exit_code = ExitCode.RENDER_FAILURE
 
 
-class MergeConflictError(YamlFragError):
+class MergeConflictError(FragmintError):
     """A merge operation encountered an incompatible existing value."""
 
     exit_code = ExitCode.MERGE_CONFLICT
 
 
-class AssertionFailedError(YamlFragError):
+class AssertionFailedError(FragmintError):
     """A fragment ``assert`` operation did not hold."""
 
     exit_code = ExitCode.RENDERED_VALIDATION
 
 
-class ValidationError(YamlFragError):
+class ValidationError(FragmintError):
     """The rendered document failed generic validation, schema validation, or a
     configured external validator."""
 

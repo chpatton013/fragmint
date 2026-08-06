@@ -1,12 +1,12 @@
 """CLI behavior and exit-code tests. See README.md "CLI usage" and "Exit codes".
 
-Use ``click.testing.CliRunner`` (or invoke ``yaml_frag.cli.main`` with an argv
+Use ``click.testing.CliRunner`` (or invoke ``fragmint.cli.main`` with an argv
 list) and assert on stdout/stderr separation and exit codes.
 
 Tests that would execute a `from: capture` source through the real CLI (no way
 to inject the stub runner through argv) are restricted to targets/paths that
 don't require captures, or they monkeypatch
-``yaml_frag.sources.DefaultCommandRunner`` so no real subprocess runs.
+``fragmint.sources.DefaultCommandRunner`` so no real subprocess runs.
 """
 
 from __future__ import annotations
@@ -16,9 +16,9 @@ from pathlib import Path
 
 import pytest
 
-from yaml_frag import sources as sources_mod
-from yaml_frag.cli import main
-from yaml_frag.exit_codes import ExitCode
+from fragmint import sources as sources_mod
+from fragmint.cli import main
+from fragmint.exit_codes import ExitCode
 
 
 class _StubCommandRunner:
@@ -809,14 +809,14 @@ def test_diagnostics_go_to_stderr(repo_root: Path, capsys: pytest.CaptureFixture
 def test_parse_var_rejects_missing_equals() -> None:
     import click
 
-    from yaml_frag.cli import _parse_var
+    from fragmint.cli import _parse_var
 
     with pytest.raises(click.BadParameter):
         _parse_var(None, None, ("no-equals-sign",))  # type: ignore[arg-type]
 
 
 def test_parse_var_parses_key_value_pairs() -> None:
-    from yaml_frag.cli import _parse_var
+    from fragmint.cli import _parse_var
 
     result = _parse_var(None, None, ("a=1", "b=two=three"))  # type: ignore[arg-type]
     assert result == {"a": "1", "b": "two=three"}
@@ -1638,7 +1638,7 @@ targets:
   t1:
     variables: {}
 """,
-            "modules/extra/yaml-frag.yaml": """
+            "modules/extra/fragmint.yaml": """
 version: 1
 aggregate:
   outputs:

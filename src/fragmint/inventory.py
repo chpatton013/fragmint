@@ -4,8 +4,8 @@ See README.md "Authoring inventory", "Fragment order", "Variable
 precedence", and "Secrets". Loading the inventory document itself — parsing,
 schema validation, the import closure, and reference resolution — lives in
 :mod:`modules`; this module resolves a single target, out of an already
-flattened :class:`~yaml_frag.models.Project`, into a
-:class:`~yaml_frag.models.ResolvedTarget`.
+flattened :class:`~fragmint.models.Project`, into a
+:class:`~fragmint.models.ResolvedTarget`.
 
 This module must contain NO domain-specific knowledge (README.md "Design
 principles": separation of data and rendering logic).
@@ -25,19 +25,19 @@ from .yamlio import load_file
 #: Variable names the renderer sets automatically; a project must not define
 #: them itself (README.md "Variable precedence"). ``target`` is injected here,
 #: in :func:`resolve_target`, since it's the same for every output. ``output``
-#: is injected later, once per output, in :func:`yaml_frag.render.render_target`
+#: is injected later, once per output, in :func:`fragmint.render.render_target`
 #: (it differs per output within the same target) — but conflicts with it are
 #: still rejected here, at the single point where all variable layers merge.
 #: The aggregate scope is the other injection site for ``output`` (set to the
 #: aggregate output's own name) and the other place the conflict is rejected
-#: — see :meth:`yaml_frag.render.RenderSession.aggregate_variables`, where
+#: — see :meth:`fragmint.render.RenderSession.aggregate_variables`, where
 #: ``target`` is deliberately never injected at all (README.md "Aggregate
 #: outputs" — "The aggregate scope").
 RESERVED_VARIABLE_NAMES = frozenset({"target", "output"})
 
 
 def _schema_path(name: str) -> Path:
-    """Resolve a packaged tool-format schema under ``yaml_frag/schemas/``."""
+    """Resolve a packaged tool-format schema under ``fragmint/schemas/``."""
     return Path(__file__).resolve().parent / "schemas" / name
 
 
@@ -75,20 +75,20 @@ def resolve_target(
     The returned ``variables`` are LAYERED BUT UNRESOLVED: a value may be an
     untagged literal or a ``from:`` source mapping. Secrets are not a
     precedence layer; they are a named store referenced via ``from: secret`` and
-    resolved later, per variable, by :func:`yaml_frag.sources.resolve_variable`.
+    resolved later, per variable, by :func:`fragmint.sources.resolve_variable`.
 
     ``target`` and ``output`` are reserved variable names (see
     :data:`RESERVED_VARIABLE_NAMES`). After layering, ``target`` is always set
     to ``target_name`` here, so every fragment can reference the current
     target via ``{{ target }}``. ``output`` is reserved the same way but is
     per-output rather than per-target, so it isn't set until
-    :func:`yaml_frag.render.render_target` renders each output — this function
+    :func:`fragmint.render.render_target` renders each output — this function
     only rejects a layer that tries to define either name, since that's the
     single point where all variable layers merge and the conflict would
     otherwise be silently discarded (README.md "Variable precedence").
 
-    Raise :class:`~yaml_frag.errors.UnknownTargetError` for an unknown target
-    and :class:`~yaml_frag.errors.InventoryError` for a referenced-but-undefined
+    Raise :class:`~fragmint.errors.UnknownTargetError` for an unknown target
+    and :class:`~fragmint.errors.InventoryError` for a referenced-but-undefined
     group or an attempt to define a reserved variable name.
     """
     target = project.targets.get(target_name)

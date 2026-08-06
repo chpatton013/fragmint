@@ -16,7 +16,7 @@ Properties this module guarantees:
 - Rendering applies to already-parsed scalar strings only; the result is never
   reparsed as YAML (README.md "Template rendering").
 
-Failures raise :class:`~yaml_frag.errors.TemplateRenderError`, including the
+Failures raise :class:`~fragmint.errors.TemplateRenderError`, including the
 render scope (a target name, or an aggregate prologue/epilogue label), the
 fragment name, operation index, and missing/failed variable name.
 

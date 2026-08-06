@@ -1,4 +1,4 @@
-"""Command-line interface for ``yaml-frag``.
+"""Command-line interface for ``fragmint``.
 
 See README.md "CLI usage". This module wires up the command structure,
 options, and the top-level error-to-exit-code mapping; the work itself lives
@@ -31,7 +31,7 @@ from . import pointer as pointer_mod
 from . import render as render_mod
 from . import validation as validation_mod
 from . import yamlio
-from .errors import ModuleError, YamlFragError
+from .errors import FragmintError, ModuleError
 from .exit_codes import ExitCode
 from .models import (
     OutputSpec,
@@ -545,7 +545,7 @@ def render_all(
                     render_mod.write_output(text, out_path)
                     if validate:
                         _run_selected_validators(project, output_spec, out_path, validators)
-            except YamlFragError as exc:
+            except FragmintError as exc:
                 click.echo(f"{target_name}: {exc}", err=True)
                 failed.append(target_name)
 
@@ -574,7 +574,7 @@ def render_all(
                     _run_selected_validators(project, output_spec, out_path, validators)
 
     if failed:
-        raise YamlFragError(
+        raise FragmintError(
             f"render-all: {len(failed)} target(s) failed: {', '.join(failed)}"
         )
 
@@ -691,7 +691,7 @@ def validate_all(
                     if name not in result.outputs:
                         continue
                     _validate_rendered(project, name, result.outputs[name], validators)
-            except YamlFragError as exc:
+            except FragmintError as exc:
                 click.echo(f"{target_name}: {exc}", err=True)
                 failed.append(target_name)
 
@@ -711,7 +711,7 @@ def validate_all(
                 _validate_rendered(project, name, rendered, validators)
 
     if failed:
-        raise YamlFragError(
+        raise FragmintError(
             f"validate-all: {len(failed)} target(s) failed: {', '.join(failed)}"
         )
 
@@ -1013,14 +1013,14 @@ def inspect(
 def main(argv: list[str] | None = None) -> int:
     """Entry point. Run the CLI and translate errors into stable exit codes.
 
-    Catches :class:`~yaml_frag.errors.YamlFragError`, prints its message to
+    Catches :class:`~fragmint.errors.FragmintError`, prints its message to
     STDERR, and returns ``exc.exit_code``. Click usage errors map to
     :data:`ExitCode.USAGE`. Returns the process exit code (never raises for
     known failures). See README.md "Exit codes".
     """
     try:
         cli.main(args=argv, standalone_mode=False)
-    except YamlFragError as exc:
+    except FragmintError as exc:
         click.echo(str(exc), err=True)
         return int(exc.exit_code)
     except click.UsageError as exc:

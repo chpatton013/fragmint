@@ -171,13 +171,13 @@ class Project:
     """The whole import closure, flattened.
 
     See README.md "The module model" and "Composition and ordering".
-    Produced by :func:`yaml_frag.modules.flatten` from a
-    :class:`~yaml_frag.modules.Closure`: every module's and the inventory's
+    Produced by :func:`fragmint.modules.flatten` from a
+    :class:`~fragmint.modules.Closure`: every module's and the inventory's
     ``outputs``/``validators`` unioned (each name defined exactly once across
     the closure), ``defaults`` variables/fragments layered in closure order,
     same-named ``groups`` merged across documents, and the root's ``targets``
     carried through unchanged. This is the single, closure-wide structure
-    :class:`~yaml_frag.render.RenderSession` and :func:`inventory.resolve_target`
+    :class:`~fragmint.render.RenderSession` and :func:`inventory.resolve_target`
     operate on — the redesign's replacement for the old, separate project
     config and inventory objects.
     """

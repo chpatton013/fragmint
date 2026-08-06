@@ -1,10 +1,10 @@
-# yaml-frag — YAML Fragment Composer
+# fragmint — YAML Fragment Composer
 
 Render structured YAML documents from an inventory of **targets**, an ordered
 sequence of reusable **fragments**, per-target **variables**, and **explicit
 path-based merge operations**.
 
-`yaml-frag` is generic: it has no built-in knowledge of any particular document
+`fragmint` is generic: it has no built-in knowledge of any particular document
 schema. Domain-specific behavior lives entirely in *modules, schemas,
 validators, and fragments*. The repository ships a complete example —
 **Ubuntu 24.04 Server autoinstall** — built this way; nothing about autoinstall
@@ -59,34 +59,34 @@ This README is the authoritative reference for the tool's design and usage.
 ## Installation
 
 Requires Python 3.12+. Either tool works; pick whichever you already use. Both
-give you the same `yaml-frag` command. `yaml-frag` is not on PyPI yet, so the
+give you the same `fragmint` command. `fragmint` is not on PyPI yet, so the
 commands below install from a Git checkout or the repository URL.
 
 **With [uv](https://docs.astral.sh/uv/).** Install it as a standalone tool,
-which puts `yaml-frag` on your `PATH` in its own isolated environment:
+which puts `fragmint` on your `PATH` in its own isolated environment:
 
 ```bash
-uv tool install git+https://github.com/chpatton013/yaml-frag
-yaml-frag --help
+uv tool install git+https://github.com/chpatton013/fragmint
+fragmint --help
 ```
 
 Or skip installing altogether and run it straight from the repository —
 convenient in CI, or for a one-off render:
 
 ```bash
-uvx --from git+https://github.com/chpatton013/yaml-frag yaml-frag --help
+uvx --from git+https://github.com/chpatton013/fragmint fragmint --help
 ```
 
 Both accept a local path in place of the URL (`uv tool install .`,
-`uvx --from . yaml-frag ...`), which is what you want while editing fragments
+`uvx --from . fragmint ...`), which is what you want while editing fragments
 in a checkout.
 
-**With pip.** Nothing about `yaml-frag` requires uv; a plain virtualenv is
+**With pip.** Nothing about `fragmint` requires uv; a plain virtualenv is
 fine:
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install git+https://github.com/chpatton013/yaml-frag
+pip install git+https://github.com/chpatton013/fragmint
 ```
 
 Or `pip install -e .` from a checkout, to run against your working tree. For
@@ -95,7 +95,7 @@ type-check tooling — see "Development" at the end of this file.
 
 ## Repository structure
 
-`yaml-frag` the tool (`src/yaml_frag/`, including `src/yaml_frag/schemas/`) is
+`fragmint` the tool (`src/fragmint/`, including `src/fragmint/schemas/`) is
 separate from any particular project that uses it. A project is an **import
 closure**: the inventory (the render root) plus every module it imports,
 transitively (see "The module model" below). Nothing about a project's
@@ -119,12 +119,12 @@ example/
 ├── fragments/             The inventory's own fragments (site-specific: per-host data).
 └── modules/
     ├── autoinstall/       Reusable module: user-data/meta-data outputs, their fragments/template.
-    │   ├── yaml-frag.yaml
+    │   ├── fragmint.yaml
     │   ├── fragments/
     │   ├── templates/
     │   └── rendered/      Output (git-ignored).
     └── ansible/            Reusable module: the aggregate ansible-inventory output.
-        ├── yaml-frag.yaml
+        ├── fragmint.yaml
         ├── fragments/
         ├── schemas/
         └── rendered/      Output (git-ignored).
@@ -135,8 +135,8 @@ directory that provides them; a module may put them wherever it likes. The
 tool itself lives alongside the example:
 
 ```
-src/yaml_frag/           The package (see "Modules" below).
-src/yaml_frag/schemas/   JSON schemas for documents, fragments, and secrets files.
+src/fragmint/           The package (see "Modules" below).
+src/fragmint/schemas/   JSON schemas for documents, fragments, and secrets files.
 tests/                   Unit, module/closure, inventory, snapshot, and CLI tests + fixtures.
 ```
 
@@ -183,7 +183,7 @@ operation — but never the value of a secret or a secret-sourced argument.
 There are two kinds of document, sharing one schema
 (`schemas/document.schema.json`) and almost all of their shape:
 
-| Capability | Module (`yaml-frag.yaml`) | Inventory (the root) |
+| Capability | Module (`fragmint.yaml`) | Inventory (the root) |
 |---|---|---|
 | Declare input dirs (`fragments_dir`, `templates_dir`, `schemas_dir`) | yes | yes |
 | `imports` other modules under local names | yes | yes |
@@ -196,14 +196,14 @@ There are two kinds of document, sharing one schema
 
 A module is "everything except targets." The **inventory** is the render
 root: the same shape, plus `targets`, and it is the only document a module
-may not itself reference. `yaml-frag` is invoked on the inventory (`--inventory
+may not itself reference. `fragmint` is invoked on the inventory (`--inventory
 PATH`, defaulting to `.`); it pulls in modules, not the other way around.
 Resolution: a value naming a **directory** looks for `<dir>/targets.yaml`; a
 **file** is used as given. A directory with no `targets.yaml`, or a missing
 file, is a fail-closed error naming the path it tried.
 
 ```yaml
-# modules/ansible/yaml-frag.yaml — a reusable module
+# modules/ansible/fragmint.yaml — a reusable module
 version: 1
 outputs:
   ansible-inventory:
@@ -384,13 +384,13 @@ targets:
 ```
 
 An `aggregate:` block, legal in any document in the closure (a module's
-`yaml-frag.yaml` or the inventory), attaches fragments that run once for a
+`fragmint.yaml` or the inventory), attaches fragments that run once for a
 `scope: aggregate` output — before any target contributes (`prologue`) or
 after every contributing target has (`epilogue`) — plus variables scoped to
 that composition, independent of any target (see "Aggregate outputs" below):
 
 ```yaml
-# modules/ansible/yaml-frag.yaml
+# modules/ansible/fragmint.yaml
 aggregate:
   variables:
     ansible_ssh_user: chris          # closure-wide, target-independent
@@ -476,7 +476,7 @@ Variable *definitions* are layered in this order (later wins):
 5. CLI overrides (`--var KEY=VALUE`, always literal strings).
 
 ```bash
-yaml-frag render gb10-01 --var identity_hostname=test-gb10
+fragmint render gb10-01 --var identity_hostname=test-gb10
 ```
 
 A later layer's definition fully replaces an earlier one — including
@@ -534,7 +534,7 @@ contributes to it — useful for something like an Ansible inventory, which
 needs one file describing every host, not one file per host.
 
 ```yaml
-# modules/ansible/yaml-frag.yaml — owns the output AND opts every target in
+# modules/ansible/fragmint.yaml — owns the output AND opts every target in
 outputs:
   ansible-inventory:
     scope: aggregate
@@ -816,7 +816,7 @@ inventory/
 needs neither flag spelled out:
 
 ```bash
-yaml-frag render gb10-01 --inventory inventory
+fragmint render gb10-01 --inventory inventory
 ```
 
 That inference is conditional on the file existing: an inventory whose
@@ -829,7 +829,7 @@ store. Like other CLI-supplied paths it resolves relative to the CWD, not to
 any document's own directory:
 
 ```bash
-yaml-frag render gb10-01 --inventory example/targets.yaml --secrets ~/private/pxe-secrets.yaml
+fragmint render gb10-01 --inventory example/targets.yaml --secrets ~/private/pxe-secrets.yaml
 ```
 
 A tracked `example/secrets.example.yaml` documents the shape;
@@ -1147,10 +1147,10 @@ never affects assertions in any command — see "Aggregate outputs" and
 "Validation" below.
 
 ```bash
-yaml-frag explain gb10-01
-yaml-frag explain gb10-01 --path /autoinstall/storage
-yaml-frag explain gb10-01 --only meta-data
-yaml-frag explain --only ansible-inventory
+fragmint explain gb10-01
+fragmint explain gb10-01 --path /autoinstall/storage
+fragmint explain gb10-01 --only meta-data
+fragmint explain --only ansible-inventory
 ```
 
 ```text
@@ -1288,7 +1288,7 @@ built into the renderer; the last two are supplied by the project.
    on nonzero exit.
 
 ```bash
-yaml-frag validate gb10-01 --validator subiquity
+fragmint validate gb10-01 --validator subiquity
 ```
 
 ## YAML serialization
@@ -1309,19 +1309,19 @@ serializer.
 ## CLI usage
 
 ```bash
-yaml-frag render gb10-01                 # -> every per-target output the target produces
-yaml-frag render gb10-01 --only meta-data --stdout   # print one output only
-yaml-frag render gb10-01 --validator subiquity
-yaml-frag render-all                     # every target's outputs, then every aggregate output once
-yaml-frag render-all --only ansible-inventory --stdout   # just the one aggregate output
-yaml-frag validate gb10-01               # render in memory + validate every output
-yaml-frag validate-all
-yaml-frag explain gb10-01 [--path /some/path]   # where did each value come from? (all outputs, or --only)
-yaml-frag explain --only ansible-inventory   # TARGET omitted: only valid for an aggregate --only
-yaml-frag inspect gb10-01                # resolved groups/per-output fragments/vars (redacted)
-yaml-frag inspect --aggregate            # effective prologue/epilogue order + declaring doc, aggregate vars
-yaml-frag inspect --aggregate --only ansible-inventory   # narrow to one aggregate output
-yaml-frag list targets|fragments|groups|outputs|modules
+fragmint render gb10-01                 # -> every per-target output the target produces
+fragmint render gb10-01 --only meta-data --stdout   # print one output only
+fragmint render gb10-01 --validator subiquity
+fragmint render-all                     # every target's outputs, then every aggregate output once
+fragmint render-all --only ansible-inventory --stdout   # just the one aggregate output
+fragmint validate gb10-01               # render in memory + validate every output
+fragmint validate-all
+fragmint explain gb10-01 [--path /some/path]   # where did each value come from? (all outputs, or --only)
+fragmint explain --only ansible-inventory   # TARGET omitted: only valid for an aggregate --only
+fragmint inspect gb10-01                # resolved groups/per-output fragments/vars (redacted)
+fragmint inspect --aggregate            # effective prologue/epilogue order + declaring doc, aggregate vars
+fragmint inspect --aggregate --only ansible-inventory   # narrow to one aggregate output
+fragmint list targets|fragments|groups|outputs|modules
 ```
 
 All of the above assume `--inventory example/targets.yaml` (or that you've
@@ -1438,7 +1438,7 @@ routing and both output scopes in practice:
   modules, `autoinstall: modules/autoinstall` and `ansible: modules/ansible`,
   and declares only site-specific data — `defaults.variables`, the `gb10`/
   `generic_vm` groups' `hardware_model`, and the three targets.
-- `example/modules/autoinstall/yaml-frag.yaml` owns the `user-data`
+- `example/modules/autoinstall/fragmint.yaml` owns the `user-data`
   (`template: user-data.tmpl`, which adds the `#cloud-config` header; `path:
   rendered/{target}/user-data`; marked `default: true`; declares the optional
   `subiquity` validator) and `meta-data` (`path: rendered/{target}/meta-data`,
@@ -1446,7 +1446,7 @@ routing and both output scopes in practice:
   importing target's `user-data`/`meta-data` fragments are opted in at once),
   and the `gb10`/`generic_vm`/`general_servers`/`proxmox_hosts`/`docker_hosts`
   groups' fragments.
-- `example/modules/ansible/yaml-frag.yaml` owns the aggregate
+- `example/modules/ansible/fragmint.yaml` owns the aggregate
   `ansible-inventory` output (`scope: aggregate`; `path:
   rendered/inventory.yaml`, a single fixed file for the whole run; `schema:
   ansible-inventory.schema.json` for whole-document shape validation), its
@@ -1479,10 +1479,10 @@ routing and both output scopes in practice:
 - Each target's `identity_password_hash` is a `capture` source that runs
   `openssl passwd -6` over the plaintext password held in the secret store
   (`example/secrets.example.yaml` shows the shape).
-- No autoinstall (or Ansible) knowledge exists in `src/yaml_frag/`.
+- No autoinstall (or Ansible) knowledge exists in `src/fragmint/`.
 
 ```bash
-yaml-frag render-all --only ansible-inventory --stdout --inventory example/targets.yaml --secrets example/secrets.example.yaml
+fragmint render-all --only ansible-inventory --stdout --inventory example/targets.yaml --secrets example/secrets.example.yaml
 ```
 
 ```yaml

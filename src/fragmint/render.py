@@ -9,7 +9,7 @@ outputs" (the second, small composition loop this module adds for
 :class:`RenderSession` owns the once-per-run work — loading the import
 closure (:mod:`modules`) and flattening it once, plus the secret store, and
 memoizing each target's resolved/resolved-and-source-resolved variables and
-each loaded fragment (keyed by its resolved :class:`~yaml_frag.models.Ref`,
+each loaded fragment (keyed by its resolved :class:`~fragmint.models.Ref`,
 which is collision-safe by construction: two modules may both contain a
 ``host`` fragment) — so a single CLI invocation that touches many targets
 (``render-all``, or any aggregate output, which by construction visits every
@@ -41,7 +41,7 @@ from pathlib import Path
 from . import fragments as fragments_mod
 from . import merge, modules, sources, templating, validation, yamlio
 from . import pointer as pointer_mod
-from .errors import InventoryError, ModuleError, TemplateRenderError, YamlFragError
+from .errors import FragmintError, InventoryError, ModuleError, TemplateRenderError
 from .inventory import RESERVED_VARIABLE_NAMES, load_secret_store, resolve_target
 from .models import (
     Fragment,
@@ -90,7 +90,7 @@ def resolve_aggregate_output_path(output: OutputSpec, override: Path | None = No
     ``override`` is used verbatim when given. Kept as a distinct function from
     :func:`resolve_output_path` (rather than a shared one with an optional
     target) so the type of path computation being performed is explicit at
-    every call site. Raises :class:`~yaml_frag.errors.ModuleError` if
+    every call site. Raises :class:`~fragmint.errors.ModuleError` if
     ``output.scope`` is not ``"aggregate"``.
     """
     if output.scope != "aggregate":
@@ -111,7 +111,7 @@ def select_validators(
 
     If ``requested`` is non-empty, use it (validating each name exists in
     ``project.validators``; unknown names raise
-    :class:`~yaml_frag.errors.ModuleError`). Otherwise fall back to
+    :class:`~fragmint.errors.ModuleError`). Otherwise fall back to
     ``output.validators``. See README.md "Validation" (named validators).
     """
     if requested:
@@ -141,7 +141,7 @@ def _render_operation_path(
     surfacing as an unrelated-looking pointer error deeper in the stack.
     ``scope`` is an already-formatted, display-ready label (a target name, or
     an aggregate prologue/epilogue label). Raises
-    :class:`~yaml_frag.errors.TemplateRenderError` in either failure case.
+    :class:`~fragmint.errors.TemplateRenderError` in either failure case.
     """
     rendered = templating.render_value(
         path, variables, scope=scope, fragment=fragment, operation_index=operation_index
@@ -153,7 +153,7 @@ def _render_operation_path(
         )
     try:
         pointer_mod.parse_pointer(rendered)
-    except YamlFragError as exc:
+    except FragmintError as exc:
         raise TemplateRenderError(
             f"{scope}: fragment {fragment}, operation {operation_index}: templated "
             f"path {rendered!r} is not a valid JSON Pointer: {exc}"
@@ -255,7 +255,7 @@ class RenderSession:
 
     def _parsed_sources(self, target_name: str) -> dict[str, VariableSource]:
         """This target's layered variables, each parsed into a
-        :class:`~yaml_frag.models.VariableSource` (structural validation only
+        :class:`~fragmint.models.VariableSource` (structural validation only
         — no secret lookup, no subprocess), memoized for the life of the
         session. Parsing stays eager for every declared variable so a
         malformed source fails closed even for one no fragment ever
@@ -719,7 +719,7 @@ def compose_output(result: RenderedOutput, output: OutputSpec) -> str:
     """Produce the final output text for one rendered output.
 
     Serialize ``result.document`` deterministically via
-    :func:`yaml_frag.yamlio.dump_str`. If ``output.template`` is set, read that
+    :func:`fragmint.yamlio.dump_str`. If ``output.template`` is set, read that
     file and replace the literal :data:`DOCUMENT_TOKEN` with the serialized
     YAML; otherwise use the serialized YAML verbatim. This is how a project adds
     a header such as ``#cloud-config``. Ends with a single trailing newline.
@@ -767,12 +767,12 @@ def layered_aggregate_variables(project: Project) -> Variables:
     "Variable precedence" — "The aggregate scope"): every module's and the
     inventory's ``defaults.variables`` (closure order), then every
     ``aggregate.variables`` (closure order), later wins. Raises
-    :class:`~yaml_frag.errors.InventoryError` if either layer defines the
+    :class:`~fragmint.errors.InventoryError` if either layer defines the
     reserved ``target``/``output`` name — `target` is undefined in this
     scope, and `output` is set per aggregate output to that output's own
     name, so neither may be a real variable definition. Shared by
     :meth:`RenderSession._aggregate_sources` (which then parses each value
-    into a :class:`~yaml_frag.models.VariableSource`) and ``inspect
+    into a :class:`~fragmint.models.VariableSource`) and ``inspect
     --aggregate`` (which instead redacts and displays this layer directly,
     unresolved, so the check fires identically in both places)."""
     layered: Variables = dict(project.default_variables)

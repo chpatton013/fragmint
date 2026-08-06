@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "yaml-frag"
+name = "fragmint"
 version = "0.1.1"
 description = "Generic YAML fragment composer: render structured YAML documents from an inventory, ordered reusable fragments, per-target variables, and explicit path-based merge operations."
 readme = "README.md"
@@ -33,13 +33,13 @@ dev = [
 ]
 
 [project.scripts]
-yaml-frag = "yaml_frag.cli:main"
+fragmint = "fragmint.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-yaml_frag = ["py.typed", "schemas/*.json"]
+fragmint = ["py.typed", "schemas/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

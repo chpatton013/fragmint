@@ -8,16 +8,16 @@ from __future__ import annotations
 
 import pytest
 
-from yaml_frag import merge, pointer, templating
-from yaml_frag.errors import (
+from fragmint import merge, pointer, templating
+from fragmint.errors import (
     AssertionFailedError,
+    FragmintError,
     MergeConflictError,
     TemplateRenderError,
-    YamlFragError,
 )
-from yaml_frag.models import FragmentOperation, ProvenanceEntry
-from yaml_frag.provenance import ProvenanceTracker
-from yaml_frag.render import _render_operation_path
+from fragmint.models import FragmentOperation, ProvenanceEntry
+from fragmint.provenance import ProvenanceTracker
+from fragmint.render import _render_operation_path
 
 
 def _entry(fragment: str = "frag", operation_index: int = 0, op: str = "set") -> ProvenanceEntry:
@@ -145,7 +145,7 @@ def test_remove_missing_without_missing_ok_fails() -> None:
     """`remove` of an absent path fails unless missing_ok is set."""
     document: dict = {"autoinstall": {}}
     op = FragmentOperation(op="remove", path="/autoinstall/oem")
-    with pytest.raises(YamlFragError):
+    with pytest.raises(FragmintError):
         _apply(document, op)
 
 
@@ -231,7 +231,7 @@ def test_json_pointer_escaping() -> None:
     assert pointer.parse_pointer("/~0~1") == ("~/",)
     assert pointer.parse_pointer("/~01") == ("~1",)
 
-    with pytest.raises(YamlFragError):
+    with pytest.raises(FragmintError):
         pointer.parse_pointer("no-leading-slash")
 
 

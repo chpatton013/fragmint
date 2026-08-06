@@ -5,12 +5,12 @@ owns the whole input-loading path: parsing a single document (module or
 inventory — they share one shape, see ``schemas/document.schema.json``),
 walking the ``imports`` graph into a :class:`Closure`, resolving
 fragment/template/schema references through it, and flattening the whole
-closure into a single :class:`~yaml_frag.models.Project` that :mod:`render`
+closure into a single :class:`~fragmint.models.Project` that :mod:`render`
 renders from.
 
 Two kinds of document
 ----------------------
-A **module** (``yaml-frag.yaml``) may declare input directories, ``imports``,
+A **module** (``fragmint.yaml``) may declare input directories, ``imports``,
 ``outputs``, ``defaults`` (variables + per-output fragments), and ``groups``.
 The **inventory** is the same shape plus ``targets``, and is the *root* of the
 import graph — the only document a module may not itself reference. See
@@ -42,7 +42,7 @@ resolver here, never left to the caller.
 Flattening
 ----------
 :func:`flatten` turns a loaded :class:`Closure` into one
-:class:`~yaml_frag.models.Project`: outputs and validators unioned by name
+:class:`~fragmint.models.Project`: outputs and validators unioned by name
 (each defined exactly once across the closure), ``defaults`` variables and
 fragments layered in closure order, same-named ``groups`` merged across
 documents, the inventory's ``targets`` carried through with their fragment
@@ -89,7 +89,7 @@ SUPPORTED_DOCUMENT_VERSION = 1
 INVENTORY_FILENAME = "targets.yaml"
 
 #: A module's document filename.
-MODULE_FILENAME = "yaml-frag.yaml"
+MODULE_FILENAME = "fragmint.yaml"
 
 #: The secrets overlay's default filename, looked for beside the inventory when
 #: ``--secrets`` is omitted. See README.md "Secrets".
@@ -121,7 +121,7 @@ POINTER_HOSTILE_CHARACTERS = ("/", "~")
 
 
 def _schema_path(name: str) -> Path:
-    """Resolve a packaged tool-format schema under ``yaml_frag/schemas/``."""
+    """Resolve a packaged tool-format schema under ``fragmint/schemas/``."""
     return Path(__file__).resolve().parent / "schemas" / name
 
 
@@ -814,7 +814,7 @@ class AggregateFragmentEntry:
     """One flattened prologue/epilogue fragment reference plus the document
     that declared it.
 
-    :class:`~yaml_frag.models.AggregateFragments` (what :func:`flatten`
+    :class:`~fragmint.models.AggregateFragments` (what :func:`flatten`
     produces) holds only the resolved :class:`Ref`, which is enough to
     render but not enough to attribute the fragment to whoever wrote the
     ``prologue``/``epilogue`` entry — a module may write
@@ -867,7 +867,7 @@ def aggregate_fragment_details(
 
 def flatten(closure: Closure) -> Project:
     """Flatten a loaded :class:`Closure` into one closure-wide
-    :class:`~yaml_frag.models.Project`.
+    :class:`~fragmint.models.Project`.
 
     See the module docstring's "Flattening" section and README.md
     "Composition and ordering" for the exact ordering/merge rules

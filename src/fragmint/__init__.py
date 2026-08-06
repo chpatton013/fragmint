@@ -1,4 +1,4 @@
-"""yaml-frag — a generic YAML fragment composer.
+"""fragmint — a generic YAML fragment composer.
 
 Render structured YAML documents from an inventory of targets, an ordered
 sequence of reusable fragments, per-target variables, and explicit path-based
@@ -7,7 +7,7 @@ schema; domain specifics (e.g. Ubuntu autoinstall) live in project
 configuration, schemas, validators, and fragments.
 
 See README.md for the full specification. Public entry points live in
-:mod:`yaml_frag.cli` and :mod:`yaml_frag.render`.
+:mod:`fragmint.cli` and :mod:`fragmint.render`.
 """
 
 from __future__ import annotations

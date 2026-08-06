@@ -3,7 +3,7 @@
 See README.md "Authoring fragments" and "Validation". Resolving a fragment
 *reference* to a file path — bare vs. module-qualified, which directory it's
 relative to, and containment within that module's own tree — lives in
-:mod:`modules` (:func:`yaml_frag.modules.fragment_path`); this module loads
+:mod:`modules` (:func:`fragmint.modules.fragment_path`); this module loads
 and validates whatever file that resolution names.
 
 Responsibilities:
@@ -45,7 +45,7 @@ ASSERTION_TYPES = frozenset({"mapping", "list", "string", "integer", "boolean"})
 
 
 def _schema_path(name: str) -> Path:
-    """Resolve a packaged tool-format schema under ``yaml_frag/schemas/``."""
+    """Resolve a packaged tool-format schema under ``fragmint/schemas/``."""
     return Path(__file__).resolve().parent / "schemas" / name
 
 
@@ -109,12 +109,12 @@ def load_fragment(path: Path, name: str) -> Fragment:
     """Load, validate, and return the fragment file at ``path``.
 
     ``path`` is an already-resolved, containment-checked absolute path (see
-    :func:`yaml_frag.modules.fragment_path`). ``name`` is the fragment's
-    qualified reference (see :func:`yaml_frag.modules.display_ref`), used for
+    :func:`fragmint.modules.fragment_path`). ``name`` is the fragment's
+    qualified reference (see :func:`fragmint.modules.display_ref`), used for
     diagnostics and provenance — bare only when the fragment resolved to the
     root document, module-qualified otherwise. Raise
-    :class:`~yaml_frag.errors.UnknownFragmentError` if the file does not
-    exist, and :class:`~yaml_frag.errors.FragmentError` for any validation
+    :class:`~fragmint.errors.UnknownFragmentError` if the file does not
+    exist, and :class:`~fragmint.errors.FragmentError` for any validation
     failure, with fragment name context.
     """
     if not path.is_file():

@@ -395,7 +395,7 @@ def apply_assert(
     Supported forms (README.md "Merge operations" (`assert`)): ``equals``,
     ``exists: true|false``,
     and ``type: mapping|list|string|integer|boolean``. Raise
-    :class:`~yaml_frag.errors.AssertionFailedError` on failure with
+    :class:`~fragmint.errors.AssertionFailedError` on failure with
     the path and expectation in the message.
     """
     existed, value = pointer.get(document, operation.path)

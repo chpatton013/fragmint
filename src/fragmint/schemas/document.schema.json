@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.com/yaml-frag/document.schema.json",
-  "title": "yaml-frag document",
-  "description": "Structural schema shared by every document in an import closure: a module (yaml-frag.yaml) and the inventory (the root document) alike. Only `targets` differs by role, and that difference (targets forbidden in a module, required in the inventory) is enforced in modules.py, not here, so a single schema file covers both and cannot drift between them. Other cross-cutting rules (imports forming a DAG without collision/aliasing, referenced groups existing, an output name being defined exactly once across the closure, containment of resolved references) are also enforced in modules.py.",
+  "$id": "https://example.com/fragmint/document.schema.json",
+  "title": "fragmint document",
+  "description": "Structural schema shared by every document in an import closure: a module (fragmint.yaml) and the inventory (the root document) alike. Only `targets` differs by role, and that difference (targets forbidden in a module, required in the inventory) is enforced in modules.py, not here, so a single schema file covers both and cannot drift between them. Other cross-cutting rules (imports forming a DAG without collision/aliasing, referenced groups existing, an output name being defined exactly once across the closure, containment of resolved references) are also enforced in modules.py.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version"],

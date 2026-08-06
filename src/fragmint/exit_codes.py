@@ -11,7 +11,7 @@ from enum import IntEnum
 
 
 class ExitCode(IntEnum):
-    """Process exit codes returned by the ``yaml-frag`` executable."""
+    """Process exit codes returned by the ``fragmint`` executable."""
 
     SUCCESS = 0
     #: General rendering failure not covered by a more specific code.

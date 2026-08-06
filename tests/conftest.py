@@ -8,7 +8,7 @@ Snapshot expectations live under ``tests/fixtures/expected/`` (see
 
 :func:`write_tree` and the :func:`closure_from_tree` fixture build a
 synthetic module/inventory tree under a temp directory and load it into a
-:class:`~yaml_frag.modules.Closure` — the one place the "build a closure from
+:class:`~fragmint.modules.Closure` — the one place the "build a closure from
 a temp tree" churn the redesign introduces lands, per the module model (see
 README.md "The module model"), instead of being repeated across every test.
 """
@@ -20,8 +20,8 @@ from pathlib import Path
 
 import pytest
 
-from yaml_frag import modules
-from yaml_frag.modules import Closure
+from fragmint import modules
+from fragmint.modules import Closure
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLE_ROOT = REPO_ROOT / "example"
@@ -87,7 +87,7 @@ def write_tree(root: Path, files: dict[str, str]) -> None:
 @pytest.fixture
 def closure_from_tree(tmp_path: Path) -> Callable[[dict[str, str]], Closure]:
     """Build a synthetic module/inventory tree under ``tmp_path`` and load
-    it into a :class:`~yaml_frag.modules.Closure`.
+    it into a :class:`~fragmint.modules.Closure`.
 
     ``files`` is relative path -> text content; the root document is expected
     at ``tmp_path / "targets.yaml"`` unless a different ``root`` relative path

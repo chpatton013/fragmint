@@ -1,4 +1,4 @@
-"""Tests for :mod:`yaml_frag.modules`: Ref parsing/display, the import
+"""Tests for :mod:`fragmint.modules`: Ref parsing/display, the import
 closure (loading, ordering, collision/aliasing/cycle detection, directory
 inference), reference resolution, and flattening. See README.md "The module
 model" and "Composition and ordering" — this file carries the bulk of the
@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from yaml_frag import modules
-from yaml_frag.errors import ModuleError
-from yaml_frag.models import Ref
+from fragmint import modules
+from fragmint.errors import ModuleError
+from fragmint.models import Ref
 
 # --- Ref parsing and display ------------------------------------------------
 
@@ -68,7 +68,7 @@ outputs:
 targets:
   t: {}
 """,
-            "modules/a/yaml-frag.yaml": "version: 1\n",
+            "modules/a/fragmint.yaml": "version: 1\n",
         }
     )
     assert closure.root.name is None
@@ -92,8 +92,8 @@ outputs:
 targets:
   t: {}
 """,
-            "modules/first/yaml-frag.yaml": "version: 1\n",
-            "modules/second/yaml-frag.yaml": "version: 1\n",
+            "modules/first/fragmint.yaml": "version: 1\n",
+            "modules/second/fragmint.yaml": "version: 1\n",
         }
     )
     assert [d.name for d in closure.documents] == ["first", "second", None]
@@ -115,17 +115,17 @@ outputs:
 targets:
   t: {}
 """,
-            "modules/left/yaml-frag.yaml": """
+            "modules/left/fragmint.yaml": """
 version: 1
 imports:
   shared: ../shared
 """,
-            "modules/right/yaml-frag.yaml": """
+            "modules/right/fragmint.yaml": """
 version: 1
 imports:
   shared: ../shared
 """,
-            "modules/shared/yaml-frag.yaml": "version: 1\n",
+            "modules/shared/fragmint.yaml": "version: 1\n",
         }
     )
     names = [d.name for d in closure.documents]
@@ -152,12 +152,12 @@ outputs:
 targets:
   t: {}
 """,
-                "modules/a/yaml-frag.yaml": """
+                "modules/a/fragmint.yaml": """
 version: 1
 imports:
   shared: ../b
 """,
-                "modules/b/yaml-frag.yaml": "version: 1\n",
+                "modules/b/fragmint.yaml": "version: 1\n",
             }
         )
 
@@ -179,7 +179,7 @@ outputs:
 targets:
   t: {}
 """,
-                "modules/shared/yaml-frag.yaml": "version: 1\n",
+                "modules/shared/fragmint.yaml": "version: 1\n",
             }
         )
 
@@ -199,7 +199,7 @@ outputs:
 targets:
   t: {}
 """,
-                "modules/a/yaml-frag.yaml": """
+                "modules/a/fragmint.yaml": """
 version: 1
 imports:
   back: ..
@@ -224,12 +224,12 @@ outputs:
 targets:
   t: {}
 """,
-            "modules/left/yaml-frag.yaml": """
+            "modules/left/fragmint.yaml": """
 version: 1
 imports:
   shared: ../shared
 """,
-            "modules/shared/yaml-frag.yaml": "version: 1\n",
+            "modules/shared/fragmint.yaml": "version: 1\n",
         }
     )
     assert closure.by_name["shared"] is not None
@@ -248,7 +248,7 @@ outputs:
 targets:
   t: {}
 """,
-            "modules/a/yaml-frag.yaml": "version: 1\n",
+            "modules/a/fragmint.yaml": "version: 1\n",
         }
     )
     assert closure.by_name["a"].targets == {}
@@ -269,7 +269,7 @@ outputs:
 targets:
   t: {}
 """,
-                "modules/a/yaml-frag.yaml": """
+                "modules/a/fragmint.yaml": """
 version: 1
 targets:
   x: {}
@@ -367,7 +367,7 @@ defaults:
 targets:
   t: {}
 """,
-            "modules/a/yaml-frag.yaml": """
+            "modules/a/fragmint.yaml": """
 version: 1
 defaults:
   outputs:
@@ -403,7 +403,7 @@ targets:
   t:
     groups: [g]
 """,
-            "modules/a/yaml-frag.yaml": """
+            "modules/a/fragmint.yaml": """
 version: 1
 groups:
   g:
@@ -437,7 +437,7 @@ defaults:
 targets:
   t: {}
 """,
-            "modules/a/yaml-frag.yaml": """
+            "modules/a/fragmint.yaml": """
 version: 1
 defaults:
   variables:
@@ -463,7 +463,7 @@ outputs:
 targets:
   t: {}
 """,
-            "modules/a/yaml-frag.yaml": """
+            "modules/a/fragmint.yaml": """
 version: 1
 outputs:
   main:
@@ -491,7 +491,7 @@ validators:
 targets:
   t: {}
 """,
-            "modules/a/yaml-frag.yaml": """
+            "modules/a/fragmint.yaml": """
 version: 1
 validators:
   check:
@@ -517,7 +517,7 @@ outputs:
 targets:
   t: {}
 """,
-            "modules/a/yaml-frag.yaml": """
+            "modules/a/fragmint.yaml": """
 version: 1
 outputs:
   other:
@@ -567,7 +567,7 @@ outputs:
 targets:
   t: {}
 """,
-            "modules/a/yaml-frag.yaml": """
+            "modules/a/fragmint.yaml": """
 version: 1
 defaults:
   outputs:
@@ -605,7 +605,7 @@ aggregate:
 targets:
   t: {}
 """,
-            "modules/a/yaml-frag.yaml": """
+            "modules/a/fragmint.yaml": """
 version: 1
 aggregate:
   outputs:
@@ -640,7 +640,7 @@ aggregate:
 targets:
   t: {}
 """,
-            "modules/a/yaml-frag.yaml": """
+            "modules/a/fragmint.yaml": """
 version: 1
 aggregate:
   variables:
@@ -669,7 +669,7 @@ outputs:
 targets:
   t: {}
 """,
-            "modules/a/yaml-frag.yaml": """
+            "modules/a/fragmint.yaml": """
 version: 1
 aggregate:
   outputs:
@@ -700,7 +700,7 @@ outputs:
 targets:
   t: {}
 """,
-            "modules/a/yaml-frag.yaml": """
+            "modules/a/fragmint.yaml": """
 version: 1
 aggregate:
   outputs:
@@ -802,7 +802,7 @@ outputs:
 targets:
   t: {}
 """,
-            "modules/a/yaml-frag.yaml": "version: 1\n",
+            "modules/a/fragmint.yaml": "version: 1\n",
             "modules/a/fragments/host.yaml": (
                 "fragment:\n  version: 1\n  description: x\noperations: []\n"
             ),
@@ -840,7 +840,7 @@ outputs:
 targets:
   t: {}
 """,
-            "modules/a/yaml-frag.yaml": "version: 1\n",
+            "modules/a/fragmint.yaml": "version: 1\n",
             "modules/a/fragments/host.yaml": (
                 "fragment:\n  version: 1\n  description: x\noperations: []\n"
             ),
@@ -874,11 +874,11 @@ outputs:
 targets:
   t: {}
 """,
-            "modules/a/yaml-frag.yaml": "version: 1\n",
+            "modules/a/fragmint.yaml": "version: 1\n",
             "modules/a/fragments/host.yaml": (
                 "fragment:\n  version: 1\n  description: a\noperations: []\n"
             ),
-            "modules/b/yaml-frag.yaml": "version: 1\n",
+            "modules/b/fragmint.yaml": "version: 1\n",
             "modules/b/fragments/host.yaml": (
                 "fragment:\n  version: 1\n  description: b\noperations: []\n"
             ),
@@ -906,7 +906,7 @@ outputs:
 targets:
   t: {}
 """,
-            "modules/a/yaml-frag.yaml": "version: 1\n",
+            "modules/a/fragmint.yaml": "version: 1\n",
             "modules/a/templates/main.tmpl": "{{ document }}",
             "modules/a/schemas/main.json": "{}",
         }

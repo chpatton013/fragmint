@@ -287,7 +287,7 @@ def resolve_variable(
     """Parse and resolve a single variable's raw value in one call.
 
     ``resolve_source(parse_source(raw), ...)`` — the per-variable entry point
-    :class:`yaml_frag.render.RenderSession` uses to resolve a variable on
+    :class:`fragmint.render.RenderSession` uses to resolve a variable on
     demand rather than a whole layered map at once (README.md "Resolution
     timing"). See :func:`resolve_source` for ``scope``.
     """

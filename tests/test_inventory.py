@@ -4,7 +4,7 @@ inventory", "Fragment order", and "Variable precedence".
 Document loading — parsing, schema validation, the import closure, name
 collision/aliasing/cycle detection, and directory inference — is tested in
 ``test_modules.py``; this file exercises :func:`inventory.resolve_target`
-directly against synthetic :class:`~yaml_frag.models.Project` values, since
+directly against synthetic :class:`~fragmint.models.Project` values, since
 resolution itself needs no files on disk.
 """
 
@@ -14,11 +14,11 @@ from pathlib import Path
 
 import pytest
 
-from yaml_frag import modules
-from yaml_frag.errors import InventoryError, UnknownFragmentError, UnknownTargetError
-from yaml_frag.fragments import load_fragment
-from yaml_frag.inventory import resolve_target
-from yaml_frag.models import GroupDefinition, Project, Ref, TargetDefinition
+from fragmint import modules
+from fragmint.errors import InventoryError, UnknownFragmentError, UnknownTargetError
+from fragmint.fragments import load_fragment
+from fragmint.inventory import resolve_target
+from fragmint.models import GroupDefinition, Project, Ref, TargetDefinition
 
 
 def _ref(path: str) -> Ref:

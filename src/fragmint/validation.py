@@ -38,7 +38,7 @@ VALIDATOR_TIMEOUT = 60.0
 
 
 def _schema_path(name: str) -> Path:
-    """Resolve a packaged tool-format schema under ``yaml_frag/schemas/``."""
+    """Resolve a packaged tool-format schema under ``fragmint/schemas/``."""
     return Path(__file__).resolve().parent / "schemas" / name
 
 
@@ -46,7 +46,7 @@ def check_unresolved_markers(document: YamlValue) -> None:
     """Reject a document containing unresolved template markers.
 
     Recurse through ``document`` and raise
-    :class:`~yaml_frag.errors.ValidationError` if any string value contains
+    :class:`~fragmint.errors.ValidationError` if any string value contains
     ``{{`` or ``{%`` (a sign that templating did not fully resolve). This is the
     one universal, document-agnostic structural check. See README.md
     "Validation".
@@ -71,7 +71,7 @@ def validate_against_schema(document: YamlValue, schema_path: Path) -> None:
     """Validate the rendered document against a project-supplied JSON schema.
 
     Only invoked when ``config.output.schema`` is set. Raise
-    :class:`~yaml_frag.errors.ValidationError` (with the failing path and
+    :class:`~fragmint.errors.ValidationError` (with the failing path and
     message) on any schema violation. The renderer ships no default document
     schema; this is entirely project-driven.
     """
@@ -95,7 +95,7 @@ def run_validator(output_path: Path, command: tuple[str, ...]) -> None:
     closure (README.md "Validation": named validators), e.g.
     ``("python3", "tools/validate-autoinstall-user-data.py")``.
     The rendered output path is passed as the final argument. Raise
-    :class:`~yaml_frag.errors.ValidationError` on nonzero exit, including
+    :class:`~fragmint.errors.ValidationError` on nonzero exit, including
     captured stdout/stderr. Selected via ``--validator NAME``.
     """
     argv = [*command, str(output_path)]
