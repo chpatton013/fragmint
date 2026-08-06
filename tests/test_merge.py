@@ -273,6 +273,52 @@ def test_typed_template_values() -> None:
     assert embedded == "value is False"
 
 
+def test_collect_variable_names_finds_names_in_nested_structures() -> None:
+    """Traverses mappings/lists/strings exactly as `render_value` does."""
+    value = {
+        "a": "{{ x }}",
+        "b": ["{{ y }}", {"c": "{{ z }}"}],
+        "d": 1,
+        "e": None,
+    }
+    assert templating.collect_variable_names(value) == ("x", "y", "z")
+
+
+def test_collect_variable_names_covers_filters_and_control_flow() -> None:
+    """Filters, indexing, and loop-local names (excluded) are all handled."""
+    assert templating.collect_variable_names("{{ a.b }}-{{ c|default(d) }}") == ("a", "c", "d")
+    assert templating.collect_variable_names(
+        "{% for x in items %}{{ x }}{{ y }}{% endfor %}"
+    ) == ("items", "y")
+    assert templating.collect_variable_names("{{ a[b] }}") == ("a", "b")
+
+
+def test_collect_variable_names_includes_untaken_branches() -> None:
+    """A name referenced only inside an `{% if %}` that never evaluates true
+    is still reported — the demand set is a function of the templates on
+    disk, not of which branch a render happens to take."""
+    assert templating.collect_variable_names("{% if false %}{{ never }}{% endif %}") == ("never",)
+
+
+def test_collect_variable_names_is_deterministic_and_deduplicated() -> None:
+    """First-appearance order, deduplicated, independent of set/hash order."""
+    value = ["{{ z }}", "{{ a }}", "{{ z }}", {"k": "{{ a }}-{{ m }}"}]
+    assert templating.collect_variable_names(value) == ("z", "a", "m")
+
+
+def test_collect_variable_names_ignores_malformed_templates() -> None:
+    """A malformed template contributes no names rather than raising; the
+    syntax error still surfaces from `render_value` at render time."""
+    assert templating.collect_variable_names("{{ broken") == ()
+
+
+def test_collect_variable_names_ignores_plain_strings() -> None:
+    """A string with no `{{`/`{%` short-circuits without parsing."""
+    assert templating.collect_variable_names("just plain text") == ()
+    assert templating.collect_variable_names(42) == ()
+    assert templating.collect_variable_names(None) == ()
+
+
 def test_provenance_recording() -> None:
     """Provenance records the last fragment/operation to touch each path."""
     document: dict = {}

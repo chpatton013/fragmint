@@ -481,9 +481,9 @@ yaml-frag render gb10-01 --var identity_hostname=test-gb10
 A later layer's definition fully replaces an earlier one — including
 replacing a literal with a source or vice versa. Layering happens first; a
 definition may be a literal or a `from:` source (see "Variable value sources"
-below). Resolution of sources happens once, *after* layering and *before*
-templating. Secrets are not a precedence layer; they are a named store
-referenced explicitly.
+below). Resolution of sources happens after layering, at first use during
+templating — see "Resolution timing". Secrets are not a precedence layer;
+they are a named store referenced explicitly.
 
 **Reserved: `target`, `output`.** After layering, `target` is always set to
 the current target's own name, so any fragment can reference it via `{{
@@ -515,7 +515,12 @@ per-target loop, so there is no single target to name. A prologue/epilogue
 fragment referencing `{{ target }}`, or declaring `requires: variables:
 [target]`, therefore fails closed with the usual strict-undefined error.
 Defining `target` or `output` in either layer is the same fail-closed
-`InventoryError` as in the per-target scope.
+`InventoryError` as in the per-target scope. This scope's variables resolve
+on demand, the same as the per-target scope (see "Resolution timing"): an
+aggregate output with no prologue or epilogue never touches this scope at
+all, and one that has either never resolves a secret or capture its
+prologue/epilogue fragments don't reference.
+
 
 ## Aggregate outputs
 
@@ -689,7 +694,10 @@ scopes the whole run to one output, of either scope, which is the fast
 iteration loop for authoring an aggregate output; `explain` accepts an
 optional TARGET, which may be omitted only when `--only` names an aggregate
 output; `list outputs` prints each output's name, scope, and defining
-document.
+document. `--only NAME` scopes variable resolution too — no other output's
+secrets/captures/schema are needed — which is what makes it a usable
+authoring loop even when the closure has secrets or captures `NAME` doesn't
+consume (see "Resolution timing").
 
 ## Variable value sources
 
@@ -750,11 +758,26 @@ will differ run to run by design.
 
 ### Resolution timing
 
-Captures execute only when a document is actually rendered (`render`,
-`render-all`, and the in-memory render behind `validate`). `inspect` and
-`explain` do **not** execute captures or reveal secrets — they show a
-redacted description such as `<capture: openssl passwd -6 -stdin>` or
-`<secret gb10-01_password>`.
+A `from: secret` is looked up and a `from: capture` is executed only if some
+fragment applied for an output the command actually renders references the
+variable in a template — in a `value`, a `path`, or an `assert` clause.
+Whether that reference sits inside a branch that is taken at render time is
+irrelevant: a name appearing anywhere in a fragment's templates counts. A
+declared variable no rendered fragment references is never resolved, so an
+unresolvable secret, a broken capture, or an unavailable capture program on
+it never fails a render that doesn't need it — this is what makes `--only
+NAME` (see "Aggregate outputs" and "CLI usage") a usable fast-iteration loop
+even when other outputs need secrets or captures `NAME` doesn't. Each
+variable resolves at most once per target for the life of a single command.
+`requires: variables:` (see "Authoring fragments") asserts that a variable is
+*defined*; it does not force it to resolve.
+
+`inspect` and `explain` do **not** execute captures or reveal secrets — they
+show a redacted description such as `<capture: openssl passwd -6 -stdin>` or
+`<secret gb10-01_password>`, regardless of whether the variable would
+otherwise be demanded. `explain` renders every fragment its selected outputs
+apply, so laziness alone would not keep it from executing/revealing what it
+templates — redaction is what does that.
 
 ## Secrets
 
@@ -782,8 +805,10 @@ needs neither flag spelled out:
 yaml-frag render gb10-01 --inventory inventory
 ```
 
-That inference is conditional on the file existing: an inventory that
-references no secret renders fine without one. `--secrets` overrides the
+That inference is conditional on the file existing: an inventory whose
+*rendered* outputs reference no secret renders fine without one — a declared
+secret no rendered fragment references is never looked up (see "Resolution
+timing"). `--secrets` overrides the
 inference and is *not* conditional — naming a file that does not exist is an
 error, so a typo fails loudly instead of silently rendering with an empty
 store. Like other CLI-supplied paths it resolves relative to the CWD, not to
@@ -830,6 +855,12 @@ operations:
         import-id:
           - "{{ ssh_import_id }}"
 ```
+
+`requires: variables:` asserts that each named variable is *defined* for the
+target — it does not force that variable's value to resolve. A required
+variable this fragment never templates (unlike each of the four above, which
+both requires and templates) is still satisfied by being defined; it is
+simply never looked up (see "Resolution timing").
 
 A bare fragment reference like `hardware/gb10` resolves to
 `<fragments_dir>/hardware/gb10.yaml` under the *declaring* document's own
@@ -1016,13 +1047,16 @@ internals. Only a small set of safe filters is exposed: `default`, `lower`,
 
 A `RenderSession` (one per run — a single CLI invocation, or an aggregate
 output, which by construction visits every target) loads the import closure
-and flattens it once (README.md "The module model"), then memoizes each
-target's resolved variables and each loaded fragment (keyed by its resolved
+and flattens it once (README.md "The module model"), then memoizes, for the
+life of the session: each target's layered variable definitions; each
+variable's resolved value, on demand and per `(target, variable)` — so a
+capture subprocess runs at most once per target regardless of how many
+outputs (per-target or aggregate) demand the variable it produces, and a
+variable no rendered output's fragments reference is never resolved at all
+(see "Resolution timing"); and each loaded fragment (keyed by its resolved
 reference, so two modules may both contain a same-named fragment without
-colliding) for the life of the session — so a capture subprocess runs at
-most once per target regardless of how many outputs (per-target or
-aggregate) consume the result, and a fragment shared by many targets is read
-and schema-validated once, not once per target.
+colliding), so a fragment shared by many targets is read and schema-validated
+once, not once per target.
 
 **Per-target output** (`scope: target`, the default). For each requested
 target:
@@ -1034,27 +1068,28 @@ target:
    fragment list (README.md "Fragment order") and one shared, ordered variable
    map. Every output name the resolved routing references must exist in the
    closure's `outputs` (a fail-closed error otherwise).
-3. Resolve variable value sources (secrets/captures) once — shared across
-   every output this target produces.
-4. For each `scope: target` output the target produces, independently
+3. For each `scope: target` output the target produces, independently
    (`scope: aggregate` outputs are skipped here — see "Aggregate outputs"):
    1. Load every referenced fragment and validate it against the fragment
       schema.
-   2. Start with an empty document.
-   3. For each fragment, in order: verify required variables; render
-      templates (including the operation's `path` — see "Paths") using the
-      resolved variable map; apply operations in listed order, recording
-      provenance for every changed path; evaluate `assert` operations as
-      they're encountered.
-   4. Run generic structural validation (unresolved-marker check; optional
+   2. Resolve exactly the variables those fragments reference (plus the
+      reserved `output` name) — see "Resolution timing".
+   3. Start with an empty document.
+   4. For each fragment, in order: verify required variables (against the
+      target's *defined* variable names, not the resolved map — a required
+      variable need not be templated); render templates (including the
+      operation's `path` — see "Paths") using the resolved variable map;
+      apply operations in listed order, recording provenance for every
+      changed path; evaluate `assert` operations as they're encountered.
+   5. Run generic structural validation (unresolved-marker check; optional
       output-specific document schema).
-   5. Serialize deterministic YAML.
-   6. If the output has a template, inject the serialized YAML into it
+   6. Serialize deterministic YAML.
+   7. If the output has a template, inject the serialized YAML into it
       (replacing `{{ document }}`); otherwise use the serialized YAML
       directly.
-   7. Write the result to that output's configured path (`{target}`
+   8. Write the result to that output's configured path (`{target}`
       substituted), using a temporary file and atomic rename.
-   8. Run any selected validators against the written output.
+   9. Run any selected validators against the written output.
 
 An output with no contributing fragments for a target is never produced for
 that target — no empty file is written. The renderer creates exactly the
@@ -1283,7 +1318,10 @@ scopes any of them to a single named output (an unknown name, or one the
 target doesn't produce, is a config error); naming an aggregate output with
 `--only` on `render`/`validate` (with a `TARGET`) is a config error pointing
 at `render-all`/`validate-all --only NAME` instead — see "Aggregate outputs".
-Two flags can only ever apply to one output at a time:
+`--only NAME` also scopes which output is actually rendered and validated at
+all: a *different* output's secrets, captures, schema, or `assert` never run
+and can never fail the command (see "Resolution timing"). Two flags can only
+ever apply to one output at a time:
 
 - `--stdout` prints one output's text. With `--only`, that's the one printed.
   Without it: a target producing exactly one output prints that one; a
@@ -1310,7 +1348,12 @@ and `--output PATH` on `render-all` are only meaningful (one file,
 unambiguous) together with `--only` naming an aggregate output — using
 either without that is a config error. If any target fails, aggregate
 outputs are skipped entirely (a partial aggregate document is worse than
-none) and the skip is reported on stderr; see "Aggregate outputs".
+none) and the skip is reported on stderr; see "Aggregate outputs". Naming a
+`scope: target` output needs only that output's own secrets/captures across
+every target — not the union of everything every target's outputs consume —
+which is what makes `--only NAME` a usable authoring loop even when some
+target's *other* output needs a secret or capture `NAME` doesn't (see
+"Resolution timing").
 
 `inspect` shows resolved groups, per-output fragment order, and variables,
 redacting any variable whose name contains `password`, `secret`, `token`,

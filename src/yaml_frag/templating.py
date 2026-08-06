@@ -18,13 +18,21 @@ Properties this module guarantees:
 
 Failures raise :class:`~yaml_frag.errors.TemplateRenderError`, including the
 target name, fragment name, operation index, and missing/failed variable name.
+
+:func:`collect_variable_names` performs the same traversal as
+:func:`render_value` over the same environment, so the two never disagree
+about which strings are templates or what a template references. It never
+raises: a malformed template contributes no names there, and its syntax error
+still surfaces from :func:`render_value` at the point the fragment is
+actually rendered.
 """
 
 from __future__ import annotations
 
+import functools
 import re
 
-from jinja2 import StrictUndefined, TemplateError
+from jinja2 import StrictUndefined, TemplateError, meta
 from jinja2.runtime import Undefined
 from jinja2.sandbox import SandboxedEnvironment
 
@@ -128,3 +136,55 @@ def render_value(
             operation_index=operation_index,
         )
     return value
+
+
+@functools.lru_cache(maxsize=4096)
+def _names_in_string(text: str) -> tuple[str, ...]:
+    """Every variable name a single template string references, sorted (the
+    names come from a ``set``, whose iteration order is not deterministic
+    across ``PYTHONHASHSEED``, so :func:`collect_variable_names` needs a
+    stable per-string order to build on). Cheaply short-circuits plain text,
+    and a malformed template yields no names rather than raising — the error
+    still surfaces from :func:`render_value`/:func:`_render_string`. Cached
+    because a fragment shared across many targets is analyzed once."""
+    if "{{" not in text and "{%" not in text:
+        return ()
+    try:
+        parsed = _ENV.parse(text)
+    except TemplateError:
+        return ()
+    return tuple(sorted(meta.find_undeclared_variables(parsed)))
+
+
+def _collect_names(value: YamlValue) -> tuple[str, ...]:
+    if isinstance(value, dict):
+        names: list[str] = []
+        for item in value.values():
+            names.extend(_collect_names(item))
+        return tuple(names)
+    if isinstance(value, list):
+        names = []
+        for item in value:
+            names.extend(_collect_names(item))
+        return tuple(names)
+    if isinstance(value, str):
+        return _names_in_string(value)
+    return ()
+
+
+def collect_variable_names(value: YamlValue) -> tuple[str, ...]:
+    """Every variable name a template in ``value`` references, in a
+    deterministic, deduplicated, first-appearance order.
+
+    Walks mappings/lists/strings exactly as :func:`render_value` does. Reports
+    a name referenced anywhere in ``value``, including inside a branch that
+    is never taken at render time (README.md "Resolution timing": whether a
+    variable is *demanded* is a function of the documents on disk, not of
+    which branch a render happens to take). Variable VALUES are never
+    templated in this tool, so only fragment operations should be passed
+    here — never a raw variable value.
+    """
+    seen: dict[str, None] = {}
+    for name in _collect_names(value):
+        seen.setdefault(name, None)
+    return tuple(seen)

@@ -14,7 +14,14 @@ from pathlib import Path
 import pytest
 
 from yaml_frag import render as render_mod
-from yaml_frag.errors import AssertionFailedError, ModuleError, ValidationError
+from yaml_frag.errors import (
+    AssertionFailedError,
+    CaptureError,
+    ModuleError,
+    SecretNotFoundError,
+    TemplateRenderError,
+    ValidationError,
+)
 from yaml_frag.models import OutputSpec
 
 SNAPSHOT_TARGETS = ["generic-vm-01", "gb10-01", "gb10-02"]
@@ -747,6 +754,409 @@ operations:
     session.render_aggregate("combined")
 
     assert len(stub_runner.calls) == 1
+
+
+def test_capture_not_run_for_variable_no_fragment_references(closure_from_tree, stub_runner) -> None:
+    """A `from: capture` variable no fragment templates is never resolved —
+    the run succeeds and the runner is never called."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  a:
+    path: "a-{target}"
+targets:
+  t1:
+    outputs:
+      a:
+        fragments: [mark]
+    variables:
+      unused_secret:
+        from: capture
+        command: [echo, hi]
+""",
+            "fragments/mark.yaml": """
+fragment:
+  version: 1
+  description: marks, never templates unused_secret
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    result = session.render_target_outputs("t1")
+    assert result.outputs["a"].document == {"value": 1}
+    assert stub_runner.calls == []
+
+
+def test_secret_not_demanded_by_rendered_output_is_not_required(closure_from_tree, stub_runner) -> None:
+    """A `from: secret` naming an absent secret, consumed only by output `b`,
+    does not fail rendering output `a` alone — the unit-level analogue of
+    `render-all --only NAME` needing only the secrets that NAME consumes."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  a:
+    path: "a-{target}"
+  b:
+    path: "b-{target}"
+targets:
+  t1:
+    outputs:
+      a:
+        fragments: [mark]
+      b:
+        fragments: [use-secret]
+    variables:
+      missing_secret:
+        from: secret
+        name: does-not-exist
+""",
+            "fragments/mark.yaml": """
+fragment:
+  version: 1
+  description: marks, never templates missing_secret
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+            "fragments/use-secret.yaml": """
+fragment:
+  version: 1
+  description: consumes missing_secret
+operations:
+  - op: set
+    path: /value
+    value: "{{ missing_secret }}"
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+
+    result = session.render_target_outputs("t1", only="a")
+    assert result.outputs["a"].document == {"value": 1}
+    assert set(result.outputs) == {"a"}
+
+    with pytest.raises(SecretNotFoundError):
+        session.render_target_outputs("t1", only="b")
+
+
+def test_aggregate_render_does_not_resolve_other_outputs_variables(
+    closure_from_tree, stub_runner
+) -> None:
+    """Composing an aggregate output does not resolve a variable that a
+    target's OTHER (non-aggregate) output alone consumes, even with an empty
+    secret store."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  solo:
+    path: "solo-{target}"
+  combined:
+    scope: aggregate
+    path: "combined.yaml"
+targets:
+  t1:
+    outputs:
+      solo:
+        fragments: [use-secret]
+      combined:
+        fragments: [mark]
+    variables:
+      missing_secret:
+        from: secret
+        name: does-not-exist
+""",
+            "fragments/mark.yaml": """
+fragment:
+  version: 1
+  description: marks, never templates missing_secret
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+            "fragments/use-secret.yaml": """
+fragment:
+  version: 1
+  description: consumes missing_secret
+operations:
+  - op: set
+    path: /value
+    value: "{{ missing_secret }}"
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    rendered = session.render_aggregate("combined")
+    assert rendered is not None
+    assert rendered.document == {"value": 1}
+
+
+def test_capture_failure_is_memoized_per_target(closure_from_tree) -> None:
+    """A capture that raises is memoized too: two outputs consuming the
+    variable both see the failure, but the runner is called only once."""
+
+    class _FailingRunner:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def run(self, command, *, stdin, timeout):  # type: ignore[no-untyped-def]
+            self.calls += 1
+            raise CaptureError("boom")
+
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  out-a:
+    path: "a-{target}"
+  out-b:
+    path: "b-{target}"
+targets:
+  t1:
+    outputs:
+      out-a:
+        fragments: [use-secret]
+      out-b:
+        fragments: [use-secret]
+    variables:
+      secret_val:
+        from: capture
+        command: [echo, hi]
+""",
+            "fragments/use-secret.yaml": """
+fragment:
+  version: 1
+  description: consumes the captured variable
+operations:
+  - op: set
+    path: /value
+    value: "{{ secret_val }}"
+""",
+        }
+    )
+    runner = _FailingRunner()
+    session = render_mod.RenderSession(closure, runner=runner)
+
+    with pytest.raises(CaptureError):
+        session.render_target_outputs("t1")
+
+    assert runner.calls == 1
+
+
+def test_required_variable_declared_but_not_templated_is_satisfied(
+    closure_from_tree, stub_runner
+) -> None:
+    """`requires: variables: [x]` is satisfied by `x` being one of the
+    target's defined variables, even when no operation templates it."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  a:
+    path: "a-{target}"
+targets:
+  t1:
+    outputs:
+      a:
+        fragments: [requires-x]
+    variables:
+      x: defined-but-unused
+""",
+            "fragments/requires-x.yaml": """
+fragment:
+  version: 1
+  description: requires x, never templates it
+requires:
+  variables:
+    - x
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    result = session.render_target_outputs("t1")
+    assert result.outputs["a"].document == {"value": 1}
+
+
+def test_required_variable_missing_still_reported(closure_from_tree, stub_runner) -> None:
+    """The same fragment, with `x` undefined, still raises the existing
+    `missing required variable` message."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  a:
+    path: "a-{target}"
+targets:
+  t1:
+    outputs:
+      a:
+        fragments: [requires-x]
+    variables: {}
+""",
+            "fragments/requires-x.yaml": """
+fragment:
+  version: 1
+  description: requires x, never templates it
+requires:
+  variables:
+    - x
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    with pytest.raises(TemplateRenderError) as excinfo:
+        session.render_target_outputs("t1")
+    assert "missing required variable 'x'" in str(excinfo.value)
+
+
+def test_malformed_variable_source_still_fails_when_unreferenced(
+    closure_from_tree, stub_runner
+) -> None:
+    """A structurally invalid `from: capture` source on a variable no
+    fragment references still fails closed — parsing stays eager."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  a:
+    path: "a-{target}"
+targets:
+  t1:
+    outputs:
+      a:
+        fragments: [mark]
+    variables:
+      broken:
+        from: capture
+        command: []
+""",
+            "fragments/mark.yaml": """
+fragment:
+  version: 1
+  description: marks, never templates broken
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    with pytest.raises(ModuleError):
+        session.render_target_outputs("t1")
+
+
+def test_render_target_outputs_only_renders_selected_output(closure_from_tree, stub_runner) -> None:
+    """`only=NAME` restricts the result to that single output — the other
+    produced output is absent from `result.outputs` entirely."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  a:
+    path: "a-{target}"
+  b:
+    path: "b-{target}"
+targets:
+  t1:
+    outputs:
+      a:
+        fragments: [mark]
+      b:
+        fragments: [mark]
+    variables: {}
+""",
+            "fragments/mark.yaml": """
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    result = session.render_target_outputs("t1", only="a")
+    assert set(result.outputs) == {"a"}
+
+
+def test_only_selected_output_does_not_resolve_other_outputs_variables(
+    closure_from_tree, stub_runner
+) -> None:
+    """`only=NAME` skips a different output entirely: its fragments are never
+    loaded and its variables never resolved, so a broken/missing secret only
+    THAT output consumes never fails the run."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  a:
+    path: "a-{target}"
+  b:
+    path: "b-{target}"
+targets:
+  t1:
+    outputs:
+      a:
+        fragments: [mark]
+      b:
+        fragments: [use-secret]
+    variables:
+      missing_secret:
+        from: secret
+        name: does-not-exist
+""",
+            "fragments/mark.yaml": """
+fragment:
+  version: 1
+  description: marks, never templates missing_secret
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+            "fragments/use-secret.yaml": """
+fragment:
+  version: 1
+  description: consumes missing_secret
+operations:
+  - op: set
+    path: /value
+    value: "{{ missing_secret }}"
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    result = session.render_target_outputs("t1", only="a")
+    assert result.outputs["a"].document == {"value": 1}
+    assert set(result.outputs) == {"a"}
 
 
 def test_aggregate_snapshot_matches_expected(

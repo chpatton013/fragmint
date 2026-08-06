@@ -19,7 +19,6 @@ from yaml_frag.sources import (
     is_source,
     parse_source,
     resolve_source,
-    resolve_variables,
 )
 
 
@@ -192,21 +191,3 @@ def test_secret_and_capture_vars_are_sensitive() -> None:
         {"from": "capture", "command": ["openssl", "passwd", "-6", "-stdin"]}
     )
     assert capture_desc == "<capture: openssl passwd -6 -stdin>"
-
-
-def test_resolve_variables_resolves_layered_map(stub_runner) -> None:  # type: ignore[no-untyped-def]
-    """resolve_variables resolves every variable in a raw (layered) map."""
-    store = SecretStore(secrets={"pw": "hunter2"})
-    raw = {
-        "keyboard_layout": "us",
-        "identity_password": {"from": "secret", "name": "pw"},
-        "identity_password_hash": {
-            "from": "capture",
-            "command": ["openssl", "passwd", "-6", "-stdin"],
-            "stdin": {"from": "secret", "name": "pw"},
-        },
-    }
-    resolved = resolve_variables(raw, secrets=store, runner=stub_runner, target="gb10-01")
-    assert resolved["keyboard_layout"] == "us"
-    assert resolved["identity_password"] == "hunter2"
-    assert resolved["identity_password_hash"] == "$6$stubsalt$stubhash"

@@ -180,7 +180,8 @@ def test_missing_fragment_reference_fails(example_root: Path) -> None:
 
 def test_resolved_variables_are_left_unresolved() -> None:
     """resolve_target layers definitions but does not resolve `from:` sources;
-    that happens later in sources.resolve_variables (see test_sources.py)."""
+    that happens later, per variable, in sources.resolve_variable (see
+    test_sources.py)."""
     project = Project(
         version=1,
         default_variables={

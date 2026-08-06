@@ -75,7 +75,7 @@ def resolve_target(
     The returned ``variables`` are LAYERED BUT UNRESOLVED: a value may be an
     untagged literal or a ``from:`` source mapping. Secrets are not a
     precedence layer; they are a named store referenced via ``from: secret`` and
-    resolved later by :func:`yaml_frag.sources.resolve_variables`.
+    resolved later, per variable, by :func:`yaml_frag.sources.resolve_variable`.
 
     ``target`` and ``output`` are reserved variable names (see
     :data:`RESERVED_VARIABLE_NAMES`). After layering, ``target`` is always set

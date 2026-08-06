@@ -1,8 +1,9 @@
 """Variable value sources: literal, secret, and subprocess capture.
 
-A variable value may be a plain literal (the default) or a tagged *source* that
-is resolved AFTER the normal defaults/group/target/CLI layering but BEFORE
-templating. See README.md "Variable value sources".
+A variable value may be a plain literal (the default) or a tagged *source*.
+It is resolved after the normal defaults/group/target/CLI layering, at first
+use during templating. See README.md "Variable value sources" and
+"Resolution timing".
 
 Syntax (``from:`` discriminator). A mapping is treated as a source only when it
 has a ``from`` key whose value is one of ``literal``, ``secret``, ``capture``;
@@ -52,7 +53,6 @@ from .models import (
     LiteralSource,
     SecretSource,
     SecretStore,
-    Variables,
     VariableSource,
     YamlValue,
 )
@@ -268,39 +268,32 @@ def resolve_source(
     raise ModuleError(f"unrecognized variable source: {source!r}")
 
 
-def resolve_variables(
-    raw: Variables,
+def resolve_variable(
+    raw: YamlValue,
     *,
     secrets: SecretStore,
-    runner: CommandRunner | None = None,
+    runner: CommandRunner,
     target: str,
+    variable: str,
     timeout: float = DEFAULT_CAPTURE_TIMEOUT,
     redact: bool = False,
-) -> Variables:
-    """Resolve every variable in a layered map to concrete values.
+) -> YamlValue:
+    """Parse and resolve a single variable's raw value in one call.
 
-    Parses each value with :func:`parse_source` and resolves it with
-    :func:`resolve_source`. ``runner`` defaults to :class:`DefaultCommandRunner`.
-    Returns a new mapping of concrete values suitable for templating. Called by
-    :mod:`render` once, after inventory resolution.
-
-    When ``redact`` is true, secret/capture sources resolve to non-executing
-    descriptions (no store lookup, no subprocess) — used by ``explain``.
+    ``resolve_source(parse_source(raw), ...)`` — the per-variable entry point
+    :class:`yaml_frag.render.RenderSession` uses to resolve a variable on
+    demand rather than a whole layered map at once (README.md "Resolution
+    timing").
     """
-    active_runner = runner if runner is not None else DefaultCommandRunner()
-    resolved: Variables = {}
-    for name, value in raw.items():
-        source = parse_source(value)
-        resolved[name] = resolve_source(
-            source,
-            secrets=secrets,
-            runner=active_runner,
-            target=target,
-            variable=name,
-            timeout=timeout,
-            redact=redact,
-        )
-    return resolved
+    return resolve_source(
+        parse_source(raw),
+        secrets=secrets,
+        runner=runner,
+        target=target,
+        variable=variable,
+        timeout=timeout,
+        redact=redact,
+    )
 
 
 def describe_source(raw: YamlValue) -> str:

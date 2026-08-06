@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import sys
 import tempfile
+from collections.abc import Collection
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -32,7 +33,16 @@ from . import validation as validation_mod
 from . import yamlio
 from .errors import ModuleError, YamlFragError
 from .exit_codes import ExitCode
-from .models import OutputSpec, Project, ProvenanceEntry, Ref, RenderedOutput, Variables, YamlValue
+from .models import (
+    OutputSpec,
+    Project,
+    ProvenanceEntry,
+    Ref,
+    RenderedOutput,
+    ResolvedTarget,
+    Variables,
+    YamlValue,
+)
 from .modules import Closure, Document
 
 
@@ -205,8 +215,26 @@ def _explain_section(name: str, rendered: RenderedOutput, *, path: str | None) -
     return f"== {name} ==\n\n" + "\n\n".join(blocks)
 
 
+def _produced_output_names(project: Project, resolved: ResolvedTarget) -> list[str]:
+    """The per-target output names :meth:`render_mod.RenderSession.render_target_outputs`
+    would produce for this already-resolved target, in order — ``resolved``'s
+    ``output_fragments`` keys whose output isn't ``scope: aggregate``.
+
+    Computed from the resolved (but not yet rendered) target so a caller can
+    select which single output to act on (``--only``, ``--stdout``,
+    ``--output PATH``) BEFORE paying for that output's variable resolution or
+    validation — the point of scoping a render to one output (README.md
+    "Resolution timing").
+    """
+    return [
+        name
+        for name in resolved.output_fragments
+        if project.outputs[name].scope != "aggregate"
+    ]
+
+
 def _select_output_names(
-    produced: dict[str, RenderedOutput],
+    produced: Collection[str],
     only: str | None,
     target: str,
 ) -> list[str]:
@@ -214,8 +242,8 @@ def _select_output_names(
 
     ``only`` (already validated against ``project.outputs`` by
     :func:`_check_only_output`) restricts to a single output, which must be one
-    the target actually produced. With no ``--only``, act on every output the
-    target produced.
+    the target actually produces. With no ``--only``, act on every output the
+    target produces.
     """
     if only is None:
         return list(produced)
@@ -226,7 +254,7 @@ def _select_output_names(
 
 def _select_single_output(
     project: Project,
-    produced: dict[str, RenderedOutput],
+    produced: Collection[str],
     only: str | None,
     target: str,
     *,
@@ -369,21 +397,28 @@ def render(
         session.project, only_output, instead=f"render-all --only {only_output}"
     )
 
-    result = session.render_target_outputs(target, validate=validate)
+    produced = _produced_output_names(session.project, session.resolve(target))
 
     if to_stdout:
-        name = _select_single_output(session.project, result.outputs, only_output, target, use_default=True)
+        name = _select_single_output(session.project, produced, only_output, target, use_default=True)
+        result = session.render_target_outputs(target, only=name, validate=validate)
         rendered = result.outputs[name]
         _emit_overrides(name, rendered.overrides, quiet=quiet_overrides)
         text = render_mod.compose_output(rendered, session.project.outputs[name])
         click.echo(text, nl=False)
         return
 
-    selected_names = _select_output_names(result.outputs, only_output, target)
+    selected_names = _select_output_names(produced, only_output, target)
     if output_path is not None:
         selected_names = [
-            _select_single_output(session.project, result.outputs, only_output, target, use_default=False)
+            _select_single_output(session.project, produced, only_output, target, use_default=False)
         ]
+
+    result = session.render_target_outputs(
+        target,
+        only=selected_names[0] if len(selected_names) == 1 else None,
+        validate=validate,
+    )
 
     for name in selected_names:
         _emit_overrides(name, result.outputs[name].overrides, quiet=quiet_overrides)
@@ -484,7 +519,9 @@ def render_all(
     if render_per_target:
         for target_name in project.targets:
             try:
-                result = session.render_target_outputs(target_name, validate=validate)
+                result = session.render_target_outputs(
+                    target_name, only=only_output, validate=validate
+                )
                 names = [only_output] if only_output is not None else list(result.outputs)
                 for name in names:
                     if name not in result.outputs:
@@ -566,9 +603,16 @@ def validate(
         project, only_output, instead=f"validate-all --only {only_output}"
     )
 
-    result = session.render_target_outputs(target, validate=True)
+    produced = _produced_output_names(project, session.resolve(target))
+    selected_names = _select_output_names(produced, only_output, target)
 
-    for name in _select_output_names(result.outputs, only_output, target):
+    result = session.render_target_outputs(
+        target,
+        only=selected_names[0] if len(selected_names) == 1 else None,
+        validate=True,
+    )
+
+    for name in selected_names:
         rendered = result.outputs[name]
         output_spec = project.outputs[name]
         text = render_mod.compose_output(rendered, output_spec)
@@ -628,7 +672,9 @@ def validate_all(
     if render_per_target:
         for target_name in project.targets:
             try:
-                result = session.render_target_outputs(target_name, validate=True)
+                result = session.render_target_outputs(
+                    target_name, only=only_output, validate=True
+                )
                 names = [only_output] if only_output is not None else list(result.outputs)
                 for name in names:
                     if name not in result.outputs:
@@ -715,14 +761,20 @@ def explain(
         project, only_output, instead=f"explain --only {only_output} (without a TARGET)"
     )
 
+    produced = _produced_output_names(project, session.resolve(target))
+    selected_names = _select_output_names(produced, only_output, target)
+
     # Redact sources so explain never executes captures or reveals secrets
     # (README.md "Resolution timing"); secret/capture-derived values appear as
     # non-executing placeholders in the provenance output.
-    result = session.render_target_outputs(target, validate=False)
+    result = session.render_target_outputs(
+        target,
+        only=selected_names[0] if len(selected_names) == 1 else None,
+        validate=False,
+    )
 
     sections = [
-        _explain_section(name, result.outputs[name], path=path)
-        for name in _select_output_names(result.outputs, only_output, target)
+        _explain_section(name, result.outputs[name], path=path) for name in selected_names
     ]
     click.echo("\n\n".join(sections))
 

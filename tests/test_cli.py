@@ -126,6 +126,28 @@ def test_render_only_scopes_to_single_output(
     assert "instance-id: gb10-01" in out_path.read_text()
 
 
+def test_render_only_does_not_require_other_outputs_secrets(
+    repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`render gb10-01 --only meta-data --stdout`, with no `--secrets`,
+    succeeds: `meta-data` doesn't reference the `identity_password_hash`
+    secret that only `user-data` consumes."""
+    exit_code = main(
+        [
+            "render",
+            "gb10-01",
+            "--inventory",
+            str(repo_root / "example" / "targets.yaml"),
+            "--only",
+            "meta-data",
+            "--stdout",
+        ]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    out = capsys.readouterr().out
+    assert "instance-id: gb10-01" in out
+
+
 def test_render_only_unknown_output_is_module_error(repo_root: Path) -> None:
     """`--only` naming an output the closure doesn't declare fails."""
     exit_code = main(
@@ -673,6 +695,54 @@ def test_render_all_only_scopes_to_single_aggregate_output(tmp_path: Path, repo_
     assert "generic-vm-01" in text
     # No per-target directories were created alongside it.
     assert not (repo_root / AUTOINSTALL_RENDERED / "gb10-01").exists()
+
+
+def test_render_all_only_aggregate_does_not_require_unrelated_secrets(
+    repo_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`render-all --only ansible-inventory --stdout`, with no `--secrets`,
+    succeeds: `ansible-inventory` is composed from `ansible:host` alone,
+    whose variables don't include the `identity_password_hash` secret that
+    only `user-data` consumes. This is the headline fix; deliberately does
+    not use `_example_args` (which passes `--secrets`)."""
+    exit_code = main(
+        [
+            "render-all",
+            "--inventory",
+            str(repo_root / "example" / "targets.yaml"),
+            "--only",
+            "ansible-inventory",
+            "--stdout",
+        ]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    out = capsys.readouterr().out
+    assert "gb10-01" in out
+    assert "gb10-02" in out
+    assert "generic-vm-01" in out
+
+
+def test_render_all_only_aggregate_runs_no_captures(repo_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`render-all --only ansible-inventory` executes zero captures: a
+    runner that fails if called still leaves the render succeeding."""
+
+    class _FailIfCalledRunner:
+        def run(self, command, *, stdin, timeout):  # type: ignore[no-untyped-def]
+            raise AssertionError(f"unexpected capture: {command!r}")
+
+    monkeypatch.setattr(sources_mod, "DefaultCommandRunner", _FailIfCalledRunner)
+
+    exit_code = main(
+        [
+            "render-all",
+            "--inventory",
+            str(repo_root / "example" / "targets.yaml"),
+            "--only",
+            "ansible-inventory",
+            "--stdout",
+        ]
+    )
+    assert exit_code == ExitCode.SUCCESS
 
 
 def test_render_all_only_scopes_to_single_target_output(repo_root: Path) -> None:
