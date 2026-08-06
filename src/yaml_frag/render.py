@@ -202,6 +202,17 @@ class RenderSession:
 
     :func:`render_target` is a thin wrapper that builds a one-shot session and
     renders a single target.
+
+    ``apply_assertions``, when ``False``, skips every ``assert`` operation
+    during composition instead of evaluating it — distinct from and
+    orthogonal to ``validate``/``redact_sources``. Since :func:`merge.apply_operation`
+    never mutates the document or records provenance for ``assert`` (README.md
+    "Merge operations"), skipping it changes nothing about a document whose
+    assertions all pass; the only observable effect is that a *failing*
+    assertion no longer raises. This is what lets ``explain`` (the only
+    caller that sets it) report provenance for a document that fails its own
+    checks (README.md "Provenance and `explain`"). It has no effect on
+    ``render``/``validate``, which always leave it at the default ``True``.
     """
 
     def __init__(
@@ -212,10 +223,12 @@ class RenderSession:
         secrets_path: Path | None = None,
         runner: CommandRunner | None = None,
         redact_sources: bool = False,
+        apply_assertions: bool = True,
     ) -> None:
         self.closure = closure
         self.cli_variables = cli_variables
         self.redact_sources = redact_sources
+        self.apply_assertions = apply_assertions
         self.project: Project = modules.flatten(closure)
         self.secrets_path = modules.resolve_secrets_path(
             secrets_path, inventory_dir=closure.root.root
@@ -421,6 +434,15 @@ class RenderSession:
                 )
 
         for index, op in enumerate(fragment.operations):
+            if op.op == "assert" and not self.apply_assertions:
+                # `assert` never mutates `doc` or records provenance (see
+                # `merge.apply_operation`), so skipping it here is a no-op on
+                # a document whose assertions would have passed; the only
+                # effect is that a failing one no longer raises. Used by
+                # `explain` so a failing assertion doesn't defeat the one
+                # command meant to diagnose it.
+                continue
+
             rendered_path = _render_operation_path(
                 op.path,
                 variables,
@@ -558,13 +580,14 @@ class RenderSession:
         not make it produced either). Epilogue ``assert`` operations run
         during this composition, not validation, so they are NOT suppressed
         by ``validate=False`` — identically to today's per-target trailing-
-        assertion idiom. Generic validation (unresolved-marker check +
-        optional ``output.schema``) still runs on the finished document
-        unless ``validate`` is ``False``. Any ``assert`` operation inside a
-        fragment contributing to an aggregate output *from a target* only
-        ever sees the PARTIAL document built so far (up through the current
-        target) — an epilogue fragment is the remedy (README.md "Aggregate
-        outputs").
+        assertion idiom. The session's ``apply_assertions`` flag is the only
+        thing that skips them (used by ``explain``). Generic validation
+        (unresolved-marker check + optional ``output.schema``) still runs on
+        the finished document unless ``validate`` is ``False``. Any
+        ``assert`` operation inside a fragment contributing to an aggregate
+        output *from a target* only ever sees the PARTIAL document built so
+        far (up through the current target) — an epilogue fragment is the
+        remedy (README.md "Aggregate outputs").
         """
         output = self.project.outputs[output_name]
         if output.scope != "aggregate":

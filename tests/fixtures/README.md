@@ -29,6 +29,19 @@ outputs"), composed once across every target rather than per target:
 yaml-frag render-all --only ansible-inventory --output tests/fixtures/expected/ansible-inventory.yaml
 ```
 
+`tests/fixtures/expected/explain-gb10-01.txt` and
+`tests/fixtures/expected/explain-ansible-inventory.txt` are the analogous
+snapshots for `explain`'s provenance report — the regression guard that proves
+skipping `assert` during `explain`'s composition changes nothing for a
+document whose assertions pass (README.md "Provenance and `explain`"):
+
+```bash
+yaml-frag explain gb10-01 --secrets example/secrets.example.yaml \
+  --inventory example/targets.yaml > tests/fixtures/expected/explain-gb10-01.txt
+yaml-frag explain --only ansible-inventory --secrets example/secrets.example.yaml \
+  --inventory example/targets.yaml > tests/fixtures/expected/explain-ansible-inventory.txt
+```
+
 ## Malformed inputs
 
 Put intentionally-broken documents/fragments used by negative tests under

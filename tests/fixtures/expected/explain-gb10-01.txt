@@ -1,0 +1,67 @@
+== user-data ==
+
+/
+  value: {'autoinstall': {'version': 1, 'keyboard': {'layout': 'us'}, 'locale': 'en_US.UTF-8', 'user-data': {'package_update': True, 'package_upgrade': False, 'write_files': [{'path': '/etc/sudoers.d/90-chris-nopasswd', 'owner': 'root:root', 'permissions': '0440', 'content': 'chris ALL=(ALL:ALL) NOPASSWD:ALL\n'}], 'runcmd': ['visudo --check --file="/etc/sudoers.d/90-chris-nopasswd"'], 'packages': ['bind9-dnsutils', 'ca-certificates', 'curl', 'iputils-ping', 'vim-tiny']}, 'identity': {'hostname': 'gb10-01', 'username': 'chris', 'password': '<capture: openssl passwd -6 -stdin>'}, 'ssh': {'install-server': True, 'allow-pw': False, 'import-id': ['gh:chpatton013']}, 'source': {'id': 'ubuntu-server-minimal', 'search_drivers': False}, 'kernel': {'package': 'linux-generic-hwe-24.04'}, 'storage': {'layout': {'name': 'lvm', 'sizing-policy': 'all'}}, 'network': {'version': 2, 'ethernets': {'primary': {'match': {'name': 'enP7s7'}, 'dhcp4': True, 'dhcp6': False}}}}}
+  source: autoinstall:autoinstall/base operation 0
+
+/autoinstall/identity
+  value: {'hostname': 'gb10-01', 'username': 'chris', 'password': '<capture: openssl passwd -6 -stdin>'}
+  source: autoinstall:autoinstall/default-user operation 0
+
+/autoinstall/kernel
+  value: {'package': 'linux-generic-hwe-24.04'}
+  source: autoinstall:hardware/gb10 operation 0
+
+/autoinstall/keyboard
+  value: {'layout': 'us'}
+  source: autoinstall:autoinstall/base operation 1
+
+/autoinstall/locale
+  value: en_US.UTF-8
+  source: autoinstall:autoinstall/base operation 1
+
+/autoinstall/network
+  value: {'version': 2, 'ethernets': {'primary': {'match': {'name': 'enP7s7'}, 'dhcp4': True, 'dhcp6': False}}}
+  source: autoinstall:hardware/gb10 operation 2
+
+/autoinstall/source
+  value: {'id': 'ubuntu-server-minimal', 'search_drivers': False}
+  source: autoinstall:ubuntu-24.04 operation 0
+
+/autoinstall/ssh
+  value: {'install-server': True, 'allow-pw': False, 'import-id': ['gh:chpatton013']}
+  source: autoinstall:autoinstall/default-user operation 0
+
+/autoinstall/storage
+  value: {'layout': {'name': 'lvm', 'sizing-policy': 'all'}}
+  source: autoinstall:hardware/gb10 operation 1
+
+/autoinstall/user-data/package_update
+  value: True
+  source: autoinstall:autoinstall/base operation 2
+
+/autoinstall/user-data/package_upgrade
+  value: False
+  source: autoinstall:autoinstall/base operation 2
+
+/autoinstall/user-data/packages
+  contributors:
+    - autoinstall:roles/general-server operation 0
+
+/autoinstall/user-data/runcmd
+  contributors:
+    - autoinstall:autoinstall/default-user operation 2
+
+/autoinstall/user-data/write_files
+  contributors:
+    - autoinstall:autoinstall/default-user operation 1
+
+== meta-data ==
+
+/instance-id
+  value: gb10-01
+  source: autoinstall:meta/instance-id operation 0
+
+/local-hostname
+  value: gb10-01
+  source: autoinstall:meta/instance-id operation 1

@@ -1,0 +1,13 @@
+== ansible-inventory ==
+
+/all/children/gb10/hosts/gb10-01/ansible_host
+  value: 10.0.0.11
+  source: ansible:ansible/host operation 0 (target gb10-01)
+
+/all/children/gb10/hosts/gb10-02/ansible_host
+  value: 10.0.0.12
+  source: ansible:ansible/host operation 0 (target gb10-02)
+
+/all/children/generic_vm/hosts/generic-vm-01/ansible_host
+  value: 10.0.0.21
+  source: ansible:ansible/host operation 0 (target generic-vm-01)

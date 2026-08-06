@@ -665,7 +665,10 @@ after every contributing target, so its `assert` operations see the finished
 document — this is what lets a project ship the same trailing-assertion
 idiom for an aggregate output that a target-scoped output already enjoys.
 Epilogue assertions run during composition, not validation, so they are not
-suppressed by `--no-validate`. An aggregate output's `schema` and any named
+suppressed by `--no-validate` for `render`/`render-all`/`validate`/
+`validate-all` — only `explain` skips them, and it does so unconditionally,
+not via `--no-validate` (see "Provenance and `explain`"). An aggregate
+output's `schema` and any named
 validators remain the right tool for whole-document *shape* checks; an
 epilogue assertion is the right tool for a whole-document *fact* a schema
 cannot state, such as a specific group actually being present in the
@@ -1132,6 +1135,16 @@ contributes to that aggregate output it is not produced at all, so there is no
 provenance to print: `explain` says so on stderr, leaves stdout empty, and
 exits zero.
 
+`explain` composes the document without evaluating `assert` operations, so it
+can report provenance for a document that fails its own checks — exactly the
+case where you most need to see where a value came from. Since `assert` never
+modifies the document or contributes provenance (it only verifies), skipping
+it changes nothing for a closure whose assertions pass; the only observable
+effect is that a failing assertion no longer prevents the report. This differs
+from `--no-validate`, which skips only generic structural validation and
+never affects assertions in any command — see "Aggregate outputs" and
+"Validation" below.
+
 ```bash
 yaml-frag explain gb10-01
 yaml-frag explain gb10-01 --path /autoinstall/storage
@@ -1254,7 +1267,12 @@ built into the renderer; the last two are supplied by the project.
    operations in fragments. The example project's `autoinstall` module ships
    a `checks` fragment asserting the autoinstall structure, and per-hardware
    fragments assert their own additions (e.g. `network.version == 2`).
-   Assertions run as part of rendering and fail closed. **For `scope:
+   Assertions run as part of rendering and fail closed for
+   `render`/`render-all`/`validate`/`validate-all`, including with
+   `--no-validate` — that flag skips only concern 2 above, never assertions
+   (see "Aggregate outputs"). `explain` is the one exception: it composes
+   without evaluating assertions, so a failing one can't defeat the
+   provenance report (see "Provenance and `explain`"). **For `scope:
    aggregate` outputs**, an `assert` placed among a target's own fragments
    still only ever sees the partial document built so far (through the
    current target), never the finished whole-run document; a whole-document

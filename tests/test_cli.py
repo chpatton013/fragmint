@@ -333,6 +333,114 @@ targets:
     assert exit_code == ExitCode.RENDERED_VALIDATION
 
 
+def _write_failing_trailing_assertion_tree(tmp_path: Path) -> Path:
+    """A closure with one target, one output, and a trailing `checks`
+    fragment whose `assert` fails against the document the earlier fragment
+    built (`/x` is 1, the assertion wants 999) — the per-target analogue of
+    ``_write_aggregate_epilogue_tree``, used to prove `explain` survives a
+    failing assertion while `render`/`validate` still enforce it."""
+    (tmp_path / "fragments").mkdir()
+    (tmp_path / "fragments" / "mark.yaml").write_text(
+        """
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /x
+    value: 1
+"""
+    )
+    (tmp_path / "fragments" / "checks.yaml").write_text(
+        """
+fragment:
+  version: 1
+  description: checks
+operations:
+  - op: assert
+    path: /x
+    equals: 999
+"""
+    )
+    (tmp_path / "targets.yaml").write_text(
+        f"""
+version: 1
+outputs:
+  main:
+    path: "{tmp_path}/rendered/{{target}}/output"
+targets:
+  t1:
+    outputs:
+      main:
+        fragments: [mark, checks]
+    variables: {{}}
+"""
+    )
+    return tmp_path / "targets.yaml"
+
+
+def test_explain_survives_failing_trailing_assertion(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`explain` is the diagnostic tool for exactly this situation — a
+    document whose own assertions fail — so a failing trailing `checks`
+    assertion must not defeat it: exit 0, with the provenance printed."""
+    inventory = _write_failing_trailing_assertion_tree(tmp_path)
+    exit_code = main(["explain", "t1", "--inventory", str(inventory)])
+    assert exit_code == ExitCode.SUCCESS
+    out = capsys.readouterr().out
+    assert "== main ==" in out
+    assert "/x" in out
+    assert "value: 1" in out
+
+
+def test_render_still_enforces_failing_trailing_assertion(tmp_path: Path) -> None:
+    """`render` (unlike `explain`) still fails a closure whose trailing
+    `checks` assertion fails."""
+    inventory = _write_failing_trailing_assertion_tree(tmp_path)
+    exit_code = main(["render", "t1", "--inventory", str(inventory), "--stdout"])
+    assert exit_code == ExitCode.RENDERED_VALIDATION
+
+
+def test_render_no_validate_still_enforces_failing_trailing_assertion(tmp_path: Path) -> None:
+    """`--no-validate` skips generic structural validation only; `assert`
+    operations run during composition, not validation, so they stay enforced
+    (README.md "Validation" and "Aggregate outputs")."""
+    inventory = _write_failing_trailing_assertion_tree(tmp_path)
+    exit_code = main(
+        ["render", "t1", "--inventory", str(inventory), "--stdout", "--no-validate"]
+    )
+    assert exit_code == ExitCode.RENDERED_VALIDATION
+
+
+def test_validate_still_enforces_failing_trailing_assertion(tmp_path: Path) -> None:
+    """`validate` still fails a closure whose trailing `checks` assertion
+    fails."""
+    inventory = _write_failing_trailing_assertion_tree(tmp_path)
+    exit_code = main(["validate", "t1", "--inventory", str(inventory)])
+    assert exit_code == ExitCode.RENDERED_VALIDATION
+
+
+def test_validate_all_still_enforces_failing_trailing_assertion(tmp_path: Path) -> None:
+    """`validate-all` still fails a closure whose trailing `checks` assertion
+    fails. Per-target failures are caught and aggregated into a generic
+    ``render-all``-style "N target(s) failed" error (ExitCode.RENDER_FAILURE),
+    same as any other per-target rendering failure — not RENDERED_VALIDATION,
+    which is the single-target/single-aggregate-output code."""
+    inventory = _write_failing_trailing_assertion_tree(tmp_path)
+    exit_code = main(["validate-all", "--inventory", str(inventory)])
+    assert exit_code == ExitCode.RENDER_FAILURE
+
+
+def test_render_all_still_enforces_failing_trailing_assertion(tmp_path: Path) -> None:
+    """`render-all` still fails a closure whose trailing `checks` assertion
+    fails (see the ``validate-all`` counterpart above for why the exit code
+    is RENDER_FAILURE, not RENDERED_VALIDATION)."""
+    inventory = _write_failing_trailing_assertion_tree(tmp_path)
+    exit_code = main(["render-all", "--inventory", str(inventory)])
+    assert exit_code == ExitCode.RENDER_FAILURE
+
+
 def test_missing_target_exit_code(repo_root: Path) -> None:
     """An unknown target returns ExitCode.INVENTORY_VALIDATION (3)."""
     exit_code = main(["render", "no-such-target", *_example_args(repo_root), "--stdout"])
@@ -467,6 +575,39 @@ def test_explain_does_not_execute_captures_or_reveal_secrets(
     assert "<capture: openssl passwd -6 -stdin>" in out
     assert "stubhash" not in out  # capture was NOT executed
     assert "$6$" not in out
+
+
+def test_explain_output_unchanged_when_assertions_pass(
+    repo_root: Path, fixtures_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`explain` skips `assert` operations during its own composition (so a
+    failing assertion can't defeat the report — see the failing-assertion
+    tests below), but that must be a genuine no-op whenever the closure's
+    assertions all pass, since `assert` never mutates the document or records
+    provenance (README.md "Merge operations"). Pinned against a snapshot of
+    `explain`'s output taken before that skip existed (see
+    tests/fixtures/README.md)."""
+    exit_code = main(["explain", "gb10-01", *_example_args(repo_root)])
+    assert exit_code == ExitCode.SUCCESS
+    out = capsys.readouterr().out
+    expected = (fixtures_dir / "expected" / "explain-gb10-01.txt").read_text()
+    assert out == expected
+
+
+def test_explain_aggregate_output_unchanged_when_assertions_pass(
+    repo_root: Path, fixtures_dir: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The aggregate analogue of
+    ``test_explain_output_unchanged_when_assertions_pass``: `explain --only
+    <aggregate>`'s report is unchanged for a closure whose epilogue assertion
+    passes."""
+    exit_code = main(
+        ["explain", "--only", "ansible-inventory", *_example_args(repo_root)]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    out = capsys.readouterr().out
+    expected = (fixtures_dir / "expected" / "explain-ansible-inventory.txt").read_text()
+    assert out == expected
 
 
 def test_inspect_redacts_secret_looking_variables(
@@ -1233,6 +1374,22 @@ def test_render_all_epilogue_failure_leaves_per_target_files_written(tmp_path: P
     assert exit_code == ExitCode.RENDERED_VALIDATION
     assert (tmp_path / "rendered" / "t1" / "output").is_file()
     assert not (tmp_path / "rendered" / "combined.yaml").exists()
+
+
+def test_explain_survives_failing_epilogue_assertion(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The aggregate analogue of
+    ``test_explain_survives_failing_trailing_assertion``: `explain --only
+    <aggregate>` must not be defeated by a failing epilogue `assert` — exit 0,
+    with the composed document's provenance printed."""
+    inventory = _write_aggregate_epilogue_tree(tmp_path, epilogue_asserts_equals=2)
+    exit_code = main(["explain", "--inventory", str(inventory), "--only", "combined"])
+    assert exit_code == ExitCode.SUCCESS
+    out = capsys.readouterr().out
+    assert "== combined ==" in out
+    assert "/value" in out
+    assert "value: 1" in out
 
 
 def test_aggregate_block_on_target_scoped_output_exit_code(tmp_path: Path) -> None:

@@ -752,6 +752,7 @@ def explain(
         cli_variables=cast(Variables, cli_variables),
         secrets_path=secrets_path,
         redact_sources=True,
+        apply_assertions=False,
     )
     project = session.project
     _check_only_output(project, only_output)
@@ -784,7 +785,10 @@ def explain(
 
     # Redact sources so explain never executes captures or reveals secrets
     # (README.md "Resolution timing"); secret/capture-derived values appear as
-    # non-executing placeholders in the provenance output.
+    # non-executing placeholders in the provenance output. `validate=False`
+    # skips generic structural validation only; `apply_assertions=False` on
+    # the session (set above) is what lets a failing `assert` not defeat this
+    # report (README.md "Provenance and `explain`").
     result = session.render_target_outputs(
         target,
         only=selected_names[0] if len(selected_names) == 1 else None,
