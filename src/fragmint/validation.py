@@ -27,12 +27,6 @@ from .errors import ValidationError
 from .models import YamlValue
 from .yamlio import load_file
 
-#: Names of the JSON schema files under ``schemas/`` used for INPUT validation.
-INVENTORY_SCHEMA = "inventory.schema.json"
-FRAGMENT_SCHEMA = "fragment.schema.json"
-PROJECT_SCHEMA = "project.schema.json"
-SECRETS_SCHEMA = "secrets.schema.json"
-
 #: Bounded timeout (seconds) for an external validator subprocess.
 VALIDATOR_TIMEOUT = 60.0
 
