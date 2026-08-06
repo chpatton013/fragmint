@@ -156,6 +156,105 @@ def test_render_only_unknown_output_is_module_error(repo_root: Path) -> None:
     assert exit_code == ExitCode.MODULE_ERROR
 
 
+def _two_output_inventory_where_target_produces_one(tmp_path: Path) -> Path:
+    """An inventory declaring two per-target outputs where target ``t`` routes
+    fragments into only one of them, so the other is declared-but-not-produced."""
+    (tmp_path / "fragments").mkdir()
+    (tmp_path / "fragments" / "mark.yaml").write_text(
+        """
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /value
+    value: 1
+"""
+    )
+    (tmp_path / "targets.yaml").write_text(
+        f"""
+version: 1
+outputs:
+  produced:
+    path: "{tmp_path}/rendered/{{target}}/produced"
+  declared-only:
+    path: "{tmp_path}/rendered/{{target}}/declared-only"
+targets:
+  t:
+    outputs:
+      produced:
+        fragments: [mark]
+    variables: {{}}
+"""
+    )
+    return tmp_path / "targets.yaml"
+
+
+@pytest.mark.parametrize("extra", [["--stdout"], ["--output", "OUT"]])
+def test_render_only_declared_but_unproduced_output_is_module_error(
+    tmp_path: Path, extra: list[str]
+) -> None:
+    """`--only` naming an output the closure declares but the target does not
+    produce is a config error on every path, including the single-output ones
+    (`--stdout`, `--output PATH`).
+
+    Being declared in the closure is weaker than being produced by this
+    target; the single-output selection path used to return the name
+    unchecked, so the caller's lookup into the render result raised an
+    unhandled KeyError instead of this diagnostic.
+    """
+    inventory_path = _two_output_inventory_where_target_produces_one(tmp_path)
+    args = [str(tmp_path / "out") if value == "OUT" else value for value in extra]
+    exit_code = main(
+        ["render", "t", "--inventory", str(inventory_path), "--only", "declared-only", *args]
+    )
+    assert exit_code == ExitCode.MODULE_ERROR
+
+
+def test_explain_only_unproduced_aggregate_reports_on_stderr(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`explain --only NAME` for an aggregate output no target contributes to
+    says so on stderr and leaves stdout empty, rather than printing a blank
+    line."""
+    (tmp_path / "fragments").mkdir()
+    (tmp_path / "fragments" / "mark.yaml").write_text(
+        """
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /value
+    value: 1
+"""
+    )
+    (tmp_path / "targets.yaml").write_text(
+        f"""
+version: 1
+outputs:
+  per:
+    path: "{tmp_path}/rendered/{{target}}/per"
+  agg:
+    scope: aggregate
+    path: "{tmp_path}/rendered/agg"
+targets:
+  t:
+    outputs:
+      per:
+        fragments: [mark]
+    variables: {{}}
+"""
+    )
+    exit_code = main(
+        ["explain", "--only", "agg", "--inventory", str(tmp_path / "targets.yaml")]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "no target contributes to output 'agg'" in captured.err
+
+
 def test_render_all_returns_nonzero_if_any_fails(tmp_path: Path) -> None:
     """`render-all` exits nonzero when any target fails."""
     (tmp_path / "fragments").mkdir()

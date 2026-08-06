@@ -263,28 +263,39 @@ def _select_single_output(
     """Resolve exactly one output name for commands that can only act on one
     at a time (``--stdout``, ``--output PATH``).
 
-    ``only`` takes precedence. Otherwise, a target that produced exactly one
-    output is unambiguous. With more than one produced output and no
-    ``--only``: fall back to ``project.default_output`` when ``use_default`` is
-    set (used by ``--stdout``); otherwise (``--output PATH``) require
-    ``--only`` explicitly. Raise :class:`ModuleError` naming the available
-    outputs when none of the above resolves it.
+    ``only`` takes precedence, but must still name an output the target
+    actually produces — the same requirement :func:`_select_output_names`
+    enforces, with the same message. Being declared in the closure (all
+    :func:`_check_only_output` checks) is weaker than being produced by *this*
+    target, and callers index the render result by the returned name, so
+    returning an unproduced name here would surface as a ``KeyError`` rather
+    than a diagnostic.
+
+    Otherwise, a target that produced exactly one output is unambiguous. With
+    more than one produced output and no ``--only``: fall back to
+    ``project.default_output`` when ``use_default`` is set (used by
+    ``--stdout``); otherwise (``--output PATH``) require ``--only``
+    explicitly. Raise :class:`ModuleError` naming the available outputs when
+    none of the above resolves it.
 
     ``produced`` may be EMPTY: aggregate-scoped outputs are excluded from
     per-target rendering (README.md "Aggregate outputs"), so a target whose
     only inventory routing is into an aggregate output produces no per-target
-    output at all. That case gets its own message, since the
-    "produces multiple outputs" one below would otherwise report an empty
-    list of them.
+    output at all. That case gets its own message — checked before ``only``,
+    since "routes nothing into a per-target output" explains the failure
+    better than naming one output that is missing — as the "produces multiple
+    outputs" one below would otherwise report an empty list of them.
     """
-    if only is not None:
-        return only
     if not produced:
         raise ModuleError(
             f"{target!r} produces no per-target outputs; its inventory routing "
             f"only feeds aggregate output(s), which are rendered for the whole "
             f"run — use `render-all`/`validate-all` (optionally with --only NAME)"
         )
+    if only is not None:
+        if only not in produced:
+            raise ModuleError(f"{target!r} does not produce output {only!r}")
+        return only
     if len(produced) == 1:
         return next(iter(produced))
     if use_default and project.default_output is not None and project.default_output in produced:
@@ -751,10 +762,17 @@ def explain(
                 "TARGET is required unless --only names an aggregate output"
             )
         rendered = session.render_aggregate(only_output, validate=False)
-        sections = (
-            [_explain_section(only_output, rendered, path=path)] if rendered is not None else []
-        )
-        click.echo("\n\n".join(sections))
+        if rendered is None:
+            # No target routes anything into this output, so it is not
+            # produced at all (README.md "Aggregate outputs") and there is no
+            # provenance to show. A note on stderr rather than empty stdout,
+            # so the absence is visible when stdout is piped.
+            click.echo(
+                f"no target contributes to output {only_output!r}; nothing to explain",
+                err=True,
+            )
+            return
+        click.echo(_explain_section(only_output, rendered, path=path))
         return
 
     _check_only_not_aggregate_for_single_target(

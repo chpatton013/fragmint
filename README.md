@@ -1116,7 +1116,10 @@ per output the target produces (or just the one named by `--only`). `TARGET`
 is optional: it may be omitted only when `--only` names an `scope: aggregate`
 output, since an aggregate output isn't a function of one target; naming
 `TARGET` together with an aggregate `--only` is the same config error as
-`render TARGET --only <aggregate>` (see "Aggregate outputs"):
+`render TARGET --only <aggregate>` (see "Aggregate outputs"). If no target
+contributes to that aggregate output it is not produced at all, so there is no
+provenance to print: `explain` says so on stderr, leaves stdout empty, and
+exits zero.
 
 ```bash
 yaml-frag explain gb10-01
