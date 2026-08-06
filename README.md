@@ -1299,7 +1299,11 @@ Output is stable and diff-friendly:
 - two-space indentation;
 - never emit Python-specific YAML tags;
 - Booleans as `true`/`false`;
-- quote strings only when necessary;
+- quote a string whenever leaving it bare would change its type for a YAML
+  1.1 reader — the emitter targets YAML 1.2, but common consumers, including
+  cloud-init's PyYAML-based parser, parse YAML 1.1, where values such as
+  `no`, `off`, and `12:30` are booleans or sexagesimal integers rather than
+  strings; otherwise leave strings unquoted;
 - prefer block style for multiline strings;
 - end files with exactly one newline.
 
