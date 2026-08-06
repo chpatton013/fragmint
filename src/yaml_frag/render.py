@@ -126,7 +126,7 @@ def _render_operation_path(
     path: str,
     variables: Variables,
     *,
-    target: str,
+    scope: str,
     fragment: str,
     operation_index: int,
 ) -> str:
@@ -139,22 +139,23 @@ def _render_operation_path(
     see the result, so a malformed pointer or a non-string template result
     fails closed with the fragment name and operation index rather than
     surfacing as an unrelated-looking pointer error deeper in the stack.
-    Raises :class:`~yaml_frag.errors.TemplateRenderError` in either failure
-    case.
+    ``scope`` is an already-formatted, display-ready label (a target name, or
+    an aggregate prologue/epilogue label). Raises
+    :class:`~yaml_frag.errors.TemplateRenderError` in either failure case.
     """
     rendered = templating.render_value(
-        path, variables, target=target, fragment=fragment, operation_index=operation_index
+        path, variables, scope=scope, fragment=fragment, operation_index=operation_index
     )
     if not isinstance(rendered, str):
         raise TemplateRenderError(
-            f"{target}: fragment {fragment}, operation {operation_index}: templated "
+            f"{scope}: fragment {fragment}, operation {operation_index}: templated "
             f"path must render to a string, got {type(rendered).__name__} ({rendered!r})"
         )
     try:
         pointer_mod.parse_pointer(rendered)
     except YamlFragError as exc:
         raise TemplateRenderError(
-            f"{target}: fragment {fragment}, operation {operation_index}: templated "
+            f"{scope}: fragment {fragment}, operation {operation_index}: templated "
             f"path {rendered!r} is not a valid JSON Pointer: {exc}"
         ) from exc
     return rendered
@@ -269,7 +270,7 @@ class RenderSession:
                     self._parsed_sources(target_name)[name],
                     secrets=self.store,
                     runner=self._runner,
-                    target=target_name,
+                    scope=f"target {target_name!r}",
                     variable=name,
                     redact=self.redact_sources,
                 )
@@ -346,7 +347,7 @@ class RenderSession:
                     self._aggregate_sources()[name],
                     secrets=self.store,
                     runner=self._runner,
-                    target="<aggregate scope>",
+                    scope="aggregate scope",
                     variable=name,
                     redact=self.redact_sources,
                 )
@@ -437,14 +438,14 @@ class RenderSession:
             rendered_path = _render_operation_path(
                 op.path,
                 variables,
-                target=scope_label,
+                scope=scope_label,
                 fragment=fragment.name,
                 operation_index=index,
             )
             rendered_value = templating.render_value(
                 op.value,
                 variables,
-                target=scope_label,
+                scope=scope_label,
                 fragment=fragment.name,
                 operation_index=index,
             )
@@ -452,7 +453,7 @@ class RenderSession:
                 key: templating.render_value(
                     value,
                     variables,
-                    target=scope_label,
+                    scope=scope_label,
                     fragment=fragment.name,
                     operation_index=index,
                 )

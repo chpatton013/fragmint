@@ -902,6 +902,104 @@ operations:
     assert rendered.document == {"value": 1}
 
 
+def test_missing_secret_message_names_target(closure_from_tree, stub_runner) -> None:
+    """A per-target variable resolution failure identifies the target by
+    name — the common case, unaffected by the aggregate scope's wording."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  solo:
+    path: "solo-{target}"
+targets:
+  t1:
+    outputs:
+      solo:
+        fragments: [use-secret]
+    variables:
+      missing_secret:
+        from: secret
+        name: nope
+""",
+            "fragments/use-secret.yaml": """
+fragment:
+  version: 1
+  description: consumes missing_secret
+operations:
+  - op: set
+    path: /value
+    value: "{{ missing_secret }}"
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    with pytest.raises(SecretNotFoundError) as excinfo:
+        session.render_target_outputs("t1")
+    assert str(excinfo.value) == (
+        "target 't1': variable 'missing_secret': secret 'nope' not found in secret store"
+    )
+
+
+def test_missing_secret_message_in_aggregate_scope_names_no_target(
+    closure_from_tree, stub_runner
+) -> None:
+    """A variable resolved in the aggregate scope (an epilogue fragment, no
+    contributing target) has no target — the message must say so plainly
+    rather than naming a fake `target '<aggregate scope>'`."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+aggregate:
+  variables:
+    aggsecret:
+      from: secret
+      name: nope
+  outputs:
+    combined:
+      epilogue: [use-aggsecret]
+targets:
+  t1:
+    outputs:
+      combined:
+        fragments: [mark]
+    variables: {}
+""",
+            "fragments/mark.yaml": """
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+            "fragments/use-aggsecret.yaml": """
+fragment:
+  version: 1
+  description: consumes the aggregate-scope secret
+operations:
+  - op: set
+    path: /aggregate_value
+    value: "{{ aggsecret }}"
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    with pytest.raises(SecretNotFoundError) as excinfo:
+        session.render_aggregate("combined")
+    message = str(excinfo.value)
+    assert message == (
+        "aggregate scope: variable 'aggsecret': secret 'nope' not found in secret store"
+    )
+    assert "target" not in message
+
+
 def test_capture_failure_is_memoized_per_target(closure_from_tree) -> None:
     """A capture that raises is memoized too: two outputs consuming the
     variable both see the failure, but the runner is called only once."""

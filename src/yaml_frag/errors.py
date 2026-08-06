@@ -60,8 +60,9 @@ class VariableResolutionError(YamlFragError):
     """A variable value source could not be resolved.
 
     Base for secret-lookup and capture-subprocess failures. Messages must name
-    the target and the variable, and must never include resolved secret values
-    or secret-derived command arguments. See README.md "Variable value sources".
+    the resolution scope (a target, or the aggregate scope) and the variable,
+    and must never include resolved secret values or secret-derived command
+    arguments. See README.md "Variable value sources".
     """
 
     exit_code = ExitCode.VARIABLE_RESOLUTION

@@ -188,7 +188,7 @@ def resolve_source(
     *,
     secrets: SecretStore,
     runner: CommandRunner,
-    target: str,
+    scope: str,
     variable: str,
     timeout: float = DEFAULT_CAPTURE_TIMEOUT,
     redact: bool = False,
@@ -197,11 +197,17 @@ def resolve_source(
 
     - ``LiteralSource`` -> its value.
     - ``SecretSource`` -> the named secret; raise
-      :class:`~errors.SecretNotFoundError` (naming ``target``/``variable``, not
+      :class:`~errors.SecretNotFoundError` (naming ``scope``/``variable``, not
       the value) if absent.
     - ``CaptureSource`` -> recursively resolve each ``command`` element (to
       strings) and ``stdin``, run via ``runner``, then strip one trailing
       newline when ``trim``. Raise :class:`~errors.CaptureError` on failure.
+
+    ``scope`` is an already-formatted, display-ready label for where this
+    resolution is happening — e.g. ``"target 't1'"`` for a target's own
+    variable, or ``"aggregate scope"`` for the aggregate scope's variable
+    (which has no target). Callers own the exact wording; this module only
+    prefixes it onto the message.
 
     When ``redact`` is true, a ``SecretSource``/``CaptureSource`` resolves to
     its non-executing description (``<secret NAME>`` / ``<capture: ...>``)
@@ -220,7 +226,7 @@ def resolve_source(
     if isinstance(source, SecretSource):
         if source.name not in secrets.secrets:
             raise SecretNotFoundError(
-                f"target {target!r}: variable {variable!r}: "
+                f"{scope}: variable {variable!r}: "
                 f"secret {source.name!r} not found in secret store"
             )
         return secrets.secrets[source.name]
@@ -232,7 +238,7 @@ def resolve_source(
                 element,
                 secrets=secrets,
                 runner=runner,
-                target=target,
+                scope=scope,
                 variable=variable,
                 timeout=timeout,
             )
@@ -244,7 +250,7 @@ def resolve_source(
                 source.stdin,
                 secrets=secrets,
                 runner=runner,
-                target=target,
+                scope=scope,
                 variable=variable,
                 timeout=timeout,
             )
@@ -257,7 +263,7 @@ def resolve_source(
             raise
         except Exception as exc:
             raise CaptureError(
-                f"target {target!r}: variable {variable!r}: "
+                f"{scope}: variable {variable!r}: "
                 f"capture command {command_name!r} failed: {exc}"
             ) from exc
 
@@ -273,7 +279,7 @@ def resolve_variable(
     *,
     secrets: SecretStore,
     runner: CommandRunner,
-    target: str,
+    scope: str,
     variable: str,
     timeout: float = DEFAULT_CAPTURE_TIMEOUT,
     redact: bool = False,
@@ -283,13 +289,13 @@ def resolve_variable(
     ``resolve_source(parse_source(raw), ...)`` — the per-variable entry point
     :class:`yaml_frag.render.RenderSession` uses to resolve a variable on
     demand rather than a whole layered map at once (README.md "Resolution
-    timing").
+    timing"). See :func:`resolve_source` for ``scope``.
     """
     return resolve_source(
         parse_source(raw),
         secrets=secrets,
         runner=runner,
-        target=target,
+        scope=scope,
         variable=variable,
         timeout=timeout,
         redact=redact,

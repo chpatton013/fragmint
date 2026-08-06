@@ -55,15 +55,15 @@ def test_secret_resolves_from_store() -> None:
         source,
         secrets=store,
         runner=None,  # type: ignore[arg-type]
-        target="gb10-01",
+        scope="target 'gb10-01'",
         variable="identity_password",
     )
     assert value == "hunter2"
 
 
 def test_missing_secret_raises() -> None:
-    """An absent secret name raises SecretNotFoundError naming target/variable,
-    not the value."""
+    """An absent secret name raises SecretNotFoundError naming the scope
+    (here, a real target) and the variable, not the value."""
     store = SecretStore(secrets={})
     source = SecretSource(name="nope")
     with pytest.raises(SecretNotFoundError) as excinfo:
@@ -71,13 +71,36 @@ def test_missing_secret_raises() -> None:
             source,
             secrets=store,
             runner=None,  # type: ignore[arg-type]
-            target="gb10-01",
+            scope="target 'gb10-01'",
             variable="identity_password",
         )
     message = str(excinfo.value)
-    assert "gb10-01" in message
-    assert "identity_password" in message
-    assert "nope" in message
+    assert message == (
+        "target 'gb10-01': variable 'identity_password': "
+        "secret 'nope' not found in secret store"
+    )
+
+
+def test_missing_secret_in_aggregate_scope_does_not_claim_a_target() -> None:
+    """The aggregate scope has no target, so its failure message must not say
+    `target` — `resolve_source` renders whatever scope label the caller
+    passes verbatim (README.md "The aggregate scope"; the caller,
+    `RenderSession._aggregate_variable`, passes `scope="aggregate scope"`)."""
+    store = SecretStore(secrets={})
+    source = SecretSource(name="nope")
+    with pytest.raises(SecretNotFoundError) as excinfo:
+        resolve_source(
+            source,
+            secrets=store,
+            runner=None,  # type: ignore[arg-type]
+            scope="aggregate scope",
+            variable="aggsecret",
+        )
+    message = str(excinfo.value)
+    assert message == (
+        "aggregate scope: variable 'aggsecret': secret 'nope' not found in secret store"
+    )
+    assert "target" not in message
 
 
 def test_capture_uses_stubbed_runner(stub_runner) -> None:  # type: ignore[no-untyped-def]
@@ -92,7 +115,7 @@ def test_capture_uses_stubbed_runner(stub_runner) -> None:  # type: ignore[no-un
         source,
         secrets=store,
         runner=stub_runner,
-        target="gb10-01",
+        scope="target 'gb10-01'",
         variable="identity_password_hash",
     )
     assert value == "$6$stubsalt$stubhash"
@@ -113,7 +136,7 @@ def test_capture_args_and_stdin_from_sources(stub_runner) -> None:  # type: igno
         source,
         secrets=store,
         runner=stub_runner,
-        target="gb10-01",
+        scope="target 'gb10-01'",
         variable="identity_password_hash",
     )
     assert stub_runner.calls == [(["openssl", "passwd", "-6", "-stdin"], "hunter2")]
@@ -130,7 +153,7 @@ def test_capture_trim_default_and_off(stub_runner) -> None:  # type: ignore[no-u
         default_source,
         secrets=store,
         runner=stub_runner,
-        target="t",
+        scope="target 't'",
         variable="v",
     )
     assert value == "$6$stubsalt$stubhash"
@@ -142,7 +165,7 @@ def test_capture_trim_default_and_off(stub_runner) -> None:  # type: ignore[no-u
         untrimmed_source,
         secrets=store,
         runner=stub_runner,
-        target="t",
+        scope="target 't'",
         variable="v",
     )
     assert value == "$6$stubsalt$stubhash\n"
@@ -171,7 +194,7 @@ def test_capture_failure_raises_capture_error() -> None:
             source,
             secrets=store,
             runner=FailingRunner(),
-            target="gb10-01",
+            scope="target 'gb10-01'",
             variable="identity_password_hash",
         )
     message = str(excinfo.value)

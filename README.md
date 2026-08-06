@@ -519,7 +519,9 @@ Defining `target` or `output` in either layer is the same fail-closed
 on demand, the same as the per-target scope (see "Resolution timing"): an
 aggregate output with no prologue or epilogue never touches this scope at
 all, and one that has either never resolves a secret or capture its
-prologue/epilogue fragments don't reference.
+prologue/epilogue fragments don't reference. A secret/capture failure here
+reads `aggregate scope: variable NAME: ...` rather than naming a target,
+since there is none.
 
 
 ## Aggregate outputs
@@ -980,8 +982,8 @@ not in the renderer.
 
 Supported assertion forms: `equals: <value>`, `exists: true|false`, and
 `type: mapping|list|string|integer|boolean`. Assertions fail closed with a
-message naming the target, fragment, operation index, path, and the
-expectation.
+message naming the render scope (the target, or an aggregate prologue/
+epilogue label), fragment, operation index, path, and the expectation.
 
 ### Merge examples
 
@@ -1020,8 +1022,9 @@ hostname: "{{ identity_hostname }}"
 ```
 
 Undefined-variable behavior is strict — a missing variable produces an error
-naming the target, fragment, operation index, and missing variable name (it
-never silently substitutes an empty string). Templates may appear in mapping
+naming the render scope (the target, or an aggregate prologue/epilogue
+label), fragment, operation index, and missing variable name (it never
+silently substitutes an empty string). Templates may appear in mapping
 values, list values, multiline strings, operation paths, and assertion
 values; they must not dynamically create new YAML structure by returning YAML
 text — rendering occurs on already-parsed scalar strings. A templated

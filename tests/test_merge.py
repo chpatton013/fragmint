@@ -241,7 +241,7 @@ def test_strict_missing_variable_fails() -> None:
         templating.render_value(
             "{{ identity_hostname }}",
             {},
-            target="gb10-01",
+            scope="gb10-01",
             fragment="hardware/gb10",
             operation_index=2,
         )
@@ -257,7 +257,7 @@ def test_typed_template_values() -> None:
     result = templating.render_value(
         "{{ enable_package_upgrade }}",
         {"enable_package_upgrade": False},
-        target="t",
+        scope="t",
         fragment="f",
         operation_index=0,
     )
@@ -266,7 +266,7 @@ def test_typed_template_values() -> None:
     embedded = templating.render_value(
         "value is {{ enable_package_upgrade }}",
         {"enable_package_upgrade": False},
-        target="t",
+        scope="t",
         fragment="f",
         operation_index=0,
     )
@@ -450,13 +450,13 @@ def test_structurally_equal_bool_vs_int() -> None:
 
 def test_templating_allowed_filters_only() -> None:
     result = templating.render_value(
-        "{{ name | upper }}", {"name": "gb10"}, target="t", fragment="f", operation_index=0
+        "{{ name | upper }}", {"name": "gb10"}, scope="t", fragment="f", operation_index=0
     )
     assert result == "GB10"
 
     with pytest.raises(TemplateRenderError):
         templating.render_value(
-            "{{ ''.__class__ }}", {}, target="t", fragment="f", operation_index=0
+            "{{ ''.__class__ }}", {}, scope="t", fragment="f", operation_index=0
         )
 
 
@@ -468,7 +468,7 @@ def test_render_operation_path_happy_path() -> None:
     result = _render_operation_path(
         "/all/children/{{ ansible_group }}/hosts/{{ target }}",
         {"ansible_group": "gb10", "target": "gb10-01"},
-        target="gb10-01",
+        scope="gb10-01",
         fragment="ansible/host",
         operation_index=0,
     )
@@ -480,7 +480,7 @@ def test_render_operation_path_literal_path_unchanged() -> None:
     result = _render_operation_path(
         "/autoinstall/kernel",
         {},
-        target="t",
+        scope="t",
         fragment="f",
         operation_index=0,
     )
@@ -494,7 +494,7 @@ def test_render_operation_path_missing_variable_fails_closed() -> None:
         _render_operation_path(
             "/all/children/{{ ansible_group }}/hosts/{{ target }}",
             {"target": "gb10-01"},
-            target="gb10-01",
+            scope="gb10-01",
             fragment="ansible/host",
             operation_index=3,
         )
@@ -512,7 +512,7 @@ def test_render_operation_path_non_string_result_fails_closed() -> None:
         _render_operation_path(
             "{{ not_a_string }}",
             {"not_a_string": 42},
-            target="t",
+            scope="t",
             fragment="f",
             operation_index=0,
         )
@@ -526,7 +526,7 @@ def test_render_operation_path_malformed_pointer_result_fails_closed() -> None:
         _render_operation_path(
             "{{ bad_path }}",
             {"bad_path": "no-leading-slash"},
-            target="t",
+            scope="t",
             fragment="f",
             operation_index=0,
         )

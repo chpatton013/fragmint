@@ -17,7 +17,8 @@ Properties this module guarantees:
   reparsed as YAML (README.md "Template rendering").
 
 Failures raise :class:`~yaml_frag.errors.TemplateRenderError`, including the
-target name, fragment name, operation index, and missing/failed variable name.
+render scope (a target name, or an aggregate prologue/epilogue label), the
+fragment name, operation index, and missing/failed variable name.
 
 :func:`collect_variable_names` performs the same traversal as
 :func:`render_value` over the same environment, so the two never disagree
@@ -61,15 +62,15 @@ def _build_environment() -> SandboxedEnvironment:
 _ENV = _build_environment()
 
 
-def _context(target: str, fragment: str, operation_index: int) -> str:
-    return f"{target}: fragment {fragment}, operation {operation_index}"
+def _context(scope: str, fragment: str, operation_index: int) -> str:
+    return f"{scope}: fragment {fragment}, operation {operation_index}"
 
 
 def _render_string(
     text: str,
     variables: Variables,
     *,
-    target: str,
+    scope: str,
     fragment: str,
     operation_index: int,
 ) -> YamlValue:
@@ -86,7 +87,7 @@ def _render_string(
         return template.render(**variables)
     except TemplateError as exc:
         raise TemplateRenderError(
-            f"{_context(target, fragment, operation_index)}: {exc}"
+            f"{_context(scope, fragment, operation_index)}: {exc}"
         ) from exc
 
 
@@ -94,7 +95,7 @@ def render_value(
     value: YamlValue,
     variables: Variables,
     *,
-    target: str,
+    scope: str,
     fragment: str,
     operation_index: int,
 ) -> YamlValue:
@@ -102,15 +103,17 @@ def render_value(
 
     Walks mappings and lists; renders string leaves through the strict
     environment; leaves non-string scalars untouched. Returns a new structure
-    (does not mutate ``value``). The ``target``/``fragment``/``operation_index``
-    arguments exist purely to build actionable error messages.
+    (does not mutate ``value``). ``scope`` is an already-formatted, display-
+    ready label for where this render is happening (a target name, or an
+    aggregate prologue/epilogue label); it, ``fragment``, and
+    ``operation_index`` exist purely to build actionable error messages.
     """
     if isinstance(value, dict):
         return {
             key: render_value(
                 item,
                 variables,
-                target=target,
+                scope=scope,
                 fragment=fragment,
                 operation_index=operation_index,
             )
@@ -121,7 +124,7 @@ def render_value(
             render_value(
                 item,
                 variables,
-                target=target,
+                scope=scope,
                 fragment=fragment,
                 operation_index=operation_index,
             )
@@ -131,7 +134,7 @@ def render_value(
         return _render_string(
             value,
             variables,
-            target=target,
+            scope=scope,
             fragment=fragment,
             operation_index=operation_index,
         )
