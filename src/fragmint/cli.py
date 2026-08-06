@@ -372,7 +372,7 @@ def cli() -> None:
 @_var_option
 @_validator_option
 @_only_option
-@click.option("--output", "output_path", type=click.Path(path_type=Path), default=None, help="Override the destination path. Requires --only or a target producing exactly one output.")
+@click.option("--output", "output_path", type=click.Path(path_type=Path), default=None, help="Override the destination path (does not change the output's serialization format). Requires --only or a target producing exactly one output.")
 @click.option("--stdout", "to_stdout", is_flag=True, help="Print one rendered output to stdout instead of writing (see --only).")
 @click.option("--dry-run", is_flag=True, help="Render and validate but write nothing.")
 @click.option("--quiet-overrides", is_flag=True, help="Suppress override warnings.")
@@ -481,7 +481,7 @@ def _select_run_scope(project: Project, only: str | None) -> tuple[bool, list[st
     "output_path",
     type=click.Path(path_type=Path),
     default=None,
-    help="Override the destination path. Only valid with --only naming an aggregate output.",
+    help="Override the destination path (does not change the output's serialization format). Only valid with --only naming an aggregate output.",
 )
 @click.option(
     "--stdout",

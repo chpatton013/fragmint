@@ -2,9 +2,10 @@
 
 See README.md "Authoring fragments" and "Validation". Resolving a fragment
 *reference* to a file path — bare vs. module-qualified, which directory it's
-relative to, and containment within that module's own tree — lives in
-:mod:`modules` (:func:`fragmint.modules.fragment_path`); this module loads
-and validates whatever file that resolution names.
+relative to, containment within that module's own tree, and which of the
+supported input formats that file is written in — lives in :mod:`modules`
+(:func:`fragmint.modules.fragment_path`); this module loads and validates
+whatever file that resolution names.
 
 Responsibilities:
 1. Parse and validate the fragment against ``schemas/fragment.schema.json`` and

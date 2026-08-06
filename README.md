@@ -1,8 +1,8 @@
-# fragmint — YAML Fragment Composer
+# fragmint — Structured Document Fragment Composer
 
-Render structured YAML documents from an inventory of **targets**, an ordered
-sequence of reusable **fragments**, per-target **variables**, and **explicit
-path-based merge operations**.
+Render structured documents — YAML, TOML, or JSON — from an inventory of
+**targets**, an ordered sequence of reusable **fragments**, per-target
+**variables**, and **explicit path-based merge operations**.
 
 `fragmint` is generic: it has no built-in knowledge of any particular document
 schema. Domain-specific behavior lives entirely in *modules, schemas,
@@ -29,8 +29,9 @@ This README is the authoritative reference for the tool's design and usage.
   host names, hardware models, usernames, SSH identities, package lists,
   network interfaces, or required-field rules. Everything domain-specific
   belongs in the inventory, the modules it imports, fragments, and schemas. The
-  renderer's only generic knowledge is: YAML parsing and deterministic
-  serialization; path-based merge operations; template variable substitution;
+  renderer's only generic knowledge is: parsing and deterministic
+  serialization of the supported formats; path-based merge operations;
+  template variable substitution;
   provenance tracking; generic structural validation (unresolved-marker
   detection, optional user-supplied schema, user-defined assertions,
   user-defined validators); output templating and file writing; and
@@ -55,6 +56,93 @@ This README is the authoritative reference for the tool's design and usage.
   diagnostics; inspectable provenance; a renderer with no domain knowledge;
   straightforward Git review. Avoid "smart" merge behavior that guesses
   intent.
+
+## Supported formats
+
+Fragments, and the documents outputs render to, may each independently be
+**YAML**, **TOML**, or **JSON**. A single composition may draw fragments from
+all three interchangeably, and any output may be rendered as any of the
+three, independent of what its inputs were.
+
+"Supported" means two separate things:
+
+- **Supported as input** (fragments): the tool parses a file of that format
+  into its internal data model — plain mappings, lists, strings, numbers,
+  booleans, and null — and everything downstream (templating, merge, pointer,
+  provenance, validation) is unaffected by which format a fragment came from.
+  A construct a format admits that the model cannot hold is a fail-closed
+  error naming the file and the JSON Pointer path, never a silent coercion.
+- **Supported as output**: the tool serializes the merged document to that
+  format deterministically. A value the format cannot express is a
+  fail-closed error naming the output and the JSON Pointer path, never a
+  coercion.
+
+The tool's own documents — the inventory (`targets.yaml`), module documents
+(`fragmint.yaml`), and the secrets overlay (`secrets.yaml`) — are YAML only.
+These are authored once per project and read only by fragmint itself, not
+data the tool renders, so multi-format support does not extend to them.
+
+**The independence rule.** The input format constrains what a fragment can
+say; the output format constrains what a document can mean. They meet only
+through the values in between — a `.toml` fragment and a `.yaml` fragment
+expressing the same data are indistinguishable once loaded. Three format-
+specific restrictions fall out of this:
+
+1. A fragment that introduces a null (a YAML mapping key with no value, or an
+   explicit `value: null`) makes any `format: toml` output that fragment
+   feeds impossible to serialize — TOML has no null. TOML fragments cannot
+   introduce this problem themselves, since TOML has no null to write either.
+2. A fragment that introduces a non-finite float (`.nan`/`.inf` in YAML,
+   `nan`/`inf` in TOML) makes any `format: json` output that fragment feeds
+   impossible to serialize — JSON has no `NaN`/`Infinity`. JSON fragments
+   cannot introduce this problem.
+3. A TOML fragment cannot express a date, time, or datetime value — TOML's
+   native date/time types have no home in fragmint's data model, and loading
+   one fails closed naming the file and the pointer, telling the author to
+   quote the value as a string. This makes a TOML fragment strictly less
+   expressive than an equivalent YAML fragment, not merely differently
+   written: a YAML fragment writing an unquoted timestamp is accepted and
+   stringified (a long-standing behavior kept for backward compatibility,
+   even though the string it produces is not the canonical form of what was
+   written); the same value in TOML is a hard error instead. This asymmetry
+   is deliberate — YAML's stringification is an existing contract with users,
+   while TOML input has none yet, so it starts closed rather than repeating
+   YAML's looseness in new surface.
+
+Type-fidelity matrix — every row reflects an actual, checked behavior of the
+concrete writer for that format:
+
+| Value in the merged document | YAML | JSON | TOML |
+|---|---|---|---|
+| null | `a:` (empty scalar) | `null` | **error**, names the pointer |
+| `nan` / `inf` / `-inf` | `.nan` / `.inf` / `-.inf` | **error**, names the pointer | `nan` / `inf` / `-inf` |
+| string containing `\r` | verbatim | escaped `\r` | single-line string (see below) |
+| string containing `\n` | block literal (`\|`) | escaped `\n` | multi-line string (`"""`) |
+| empty mapping `{}` | `a: {}` | `"a": {}` | `[a]` (empty table) |
+| empty list `[]` | `a: []` | `"a": []` | `a = []` |
+| list of mappings | block sequence | array of objects | array of tables `[[a]]` |
+| whole document empty | `{}` | `{}` | (empty file) |
+| mapping insertion order | preserved | preserved | preserved **only among a table's own scalar keys** — see below |
+
+TOML has two format-specific wrinkles, both deterministic and both documented
+here rather than worked around:
+
+- **Table ordering.** TOML's syntax requires that once a `[sub]` header opens
+  a table, every following `key = value` belongs to `sub` — so a table's own
+  scalar keys must all precede its sub-tables and arrays-of-tables in the
+  emitted text, regardless of the order they were inserted in relative to
+  each other. Within one table, keys holding scalars, arrays of scalars, and
+  inline values keep their insertion order; that table's sub-tables and
+  arrays-of-tables follow, themselves in insertion order relative to each
+  other. This is a requirement of TOML's grammar, not a choice — fragmint
+  never sorts keys, in any format.
+- **Multi-line strings and `\r`.** TOML's `"""`-delimited multi-line strings
+  normalize `\r\n` on parse, which would silently change a string containing
+  a bare `\r`. To stay lossless, a TOML output uses `"""` multi-line strings
+  when no string value in the document contains `\r`; if any does, every
+  multi-line string in that document falls back to a single-line, escaped
+  form instead. The choice is a pure function of the data, so identical data
+  always produces identical bytes.
 
 ## Installation
 
@@ -148,7 +236,7 @@ tests/                   Unit, module/closure, inventory, snapshot, and CLI test
 | `errors.py`     | Exception hierarchy; each maps to an exit code. |
 | `exit_codes.py` | Stable process exit codes. |
 | `modules.py`    | Document loading, the import closure, reference resolution, flattening. |
-| `yamlio.py`     | Safe YAML load + deterministic serialization. |
+| `formats.py`    | Format boundary: safe load and deterministic serialization for YAML, TOML, and JSON. |
 | `pointer.py`    | JSON Pointer parse/get/set/delete (no array indexes). |
 | `templating.py` | Strict, sandboxed, type-preserving Jinja substitution. |
 | `inventory.py`  | Resolve a target's fragments + vars from the flattened project. |
@@ -166,10 +254,12 @@ Custom exception types (`errors.py`), each mapped to a stable exit code:
 ModuleError
 InventoryError
 FragmentError
+AmbiguousFragmentError
 TemplateRenderError
 MergeConflictError
 AssertionFailedError
 ValidationError
+SerializationError
 VariableResolutionError   (base for SecretNotFoundError, CaptureError)
 UnknownTargetError
 UnknownFragmentError
@@ -269,8 +359,8 @@ layout without silently swallowing a typo in an explicit path.
 
 A project declares one or more **named outputs**, each with its own path
 pattern + optional text template + optional document schema + default
-validators + a **scope** — but any document in the closure may declare or
-attach to them:
+validators + a **scope** + a **serialization format** — but any document in
+the closure may declare or attach to them:
 
 - An output name must be **defined exactly once** in the whole closure — a
   duplicate definition is an error naming both defining documents.
@@ -293,6 +383,30 @@ most one may set `default: true` (more than one is an error), and with
 several but none marked, there's no implicit default — commands that need
 exactly one output (like `--stdout` with no `--only`) then require `--only
 NAME`.
+
+**`format`.** An output's serialization format is resolved once, at document
+load time, in this order: an explicit `format: yaml|toml|json` wins;
+otherwise it's inferred from the suffix of `path` — `.yaml`/`.yml` -> yaml,
+`.toml` -> toml, `.json` -> json; otherwise it defaults to `yaml`. An unknown
+`format:` value is a config error naming the output and the accepted values.
+Inference reads `path` **as written, before `{target}` substitution** — so a
+target legitimately named `web.json` doesn't make an extension-less
+`path: "rendered/{target}"` output secretly become JSON for that one target;
+format is a fixed property of the output, exactly like `scope` and `schema`,
+checked once regardless of which target renders it. `--output PATH`
+redirects where the bytes land; it does not reinterpret what they are — it
+never changes an output's format.
+
+```yaml
+outputs:
+  user-data:
+    path: "rendered/{target}/user-data"   # no suffix -> yaml
+  api-manifest:
+    path: "rendered/{target}/manifest.json"   # .json -> json
+  agent-config:
+    path: "rendered/{target}/agent.conf"      # unknown suffix -> yaml
+    format: toml                              # explicit, wins
+```
 
 Everything domain-specific (the `#cloud-config` header, the Subiquity
 validator, any document schema) lives in a module, in the inventory, or in
@@ -325,6 +439,22 @@ a module relocatable and independently ownable. After resolution, a resolved
 path must remain **inside the module directory it resolved through** — an
 escaping reference (e.g. `../../etc/passwd`) fails closed rather than
 silently reaching outside the module's own tree.
+
+**A fragment reference is extension-less and format-independent.** It
+resolves to exactly one of `<ref>.yaml`, `<ref>.toml`, or `<ref>.json` under
+the resolved `fragments_dir` — matching none is a fail-closed error naming
+every path tried; matching more than one is a fail-closed error naming the
+reference and every file it matches. There is no preference order between
+formats — an ambiguity is never resolved by silently picking one, so a
+project cannot come to depend on that. `.yml` is deliberately **not** a
+fragment candidate suffix (it *is* accepted for output-path format
+inference, where no such ambiguity is possible), so a project with both
+`base.yaml` and `base.yml` under a `fragments_dir` keeps resolving to
+`base.yaml` exactly as it always has. A stray `.json` or `.toml` file that
+happens to sit under a `fragments_dir` for unrelated reasons becomes a
+visible fragment (`list fragments` will show it) and can create a new
+ambiguity with a same-stemmed `.yaml` fragment — worth knowing before adding
+non-fragment files there.
 
 **Display.** A resolved reference displays *bare* only when it resolves to
 the root document (the inventory); it displays *qualified* (`ns:path`)
@@ -841,7 +971,7 @@ resolved value into the output document.
 
 A fragment declares metadata, optional required variables, and an ordered
 list of explicit operations. Fragments may live under any nested path and are
-referenced by that path (minus `.yaml`):
+referenced by that path (minus its extension):
 
 ```yaml
 fragment:
@@ -876,11 +1006,74 @@ variable this fragment never templates (unlike each of the four above, which
 both requires and templates) is still satisfied by being defined; it is
 simply never looked up (see "Resolution timing").
 
-A bare fragment reference like `hardware/gb10` resolves to
-`<fragments_dir>/hardware/gb10.yaml` under the *declaring* document's own
-`fragments_dir`; a module-qualified reference like `autoinstall:hardware/gb10`
-resolves the same way against module `autoinstall`'s `fragments_dir` instead
-(see "The module model" — "Reference resolution").
+A bare fragment reference like `hardware/gb10` resolves to exactly one of
+`<fragments_dir>/hardware/gb10.yaml`, `.toml`, or `.json` under the
+*declaring* document's own `fragments_dir`; a module-qualified reference
+like `autoinstall:hardware/gb10` resolves the same way against module
+`autoinstall`'s `fragments_dir` instead (see "The module model" — "Reference
+resolution", and "Supported formats" for what happens when more than one
+candidate exists).
+
+The fragment above, expressed identically in TOML and JSON — a fragment's
+format never affects how it composes (see "Supported formats"):
+
+```toml
+[fragment]
+version = 1
+description = "Configure the default administrative user and SSH access."
+
+[requires]
+variables = [
+  "identity_hostname",
+  "identity_username",
+  "identity_password_hash",
+  "ssh_import_id",
+]
+
+[[operations]]
+op = "merge"
+path = "/autoinstall"
+
+[operations.value.identity]
+hostname = "{{ identity_hostname }}"
+username = "{{ identity_username }}"
+password = "{{ identity_password_hash }}"
+
+[operations.value.ssh]
+install-server = true
+allow-pw = false
+import-id = ["{{ ssh_import_id }}"]
+```
+
+```json
+{
+  "fragment": {
+    "version": 1,
+    "description": "Configure the default administrative user and SSH access."
+  },
+  "requires": {
+    "variables": ["identity_hostname", "identity_username", "identity_password_hash", "ssh_import_id"]
+  },
+  "operations": [
+    {
+      "op": "merge",
+      "path": "/autoinstall",
+      "value": {
+        "identity": {
+          "hostname": "{{ identity_hostname }}",
+          "username": "{{ identity_username }}",
+          "password": "{{ identity_password_hash }}"
+        },
+        "ssh": {
+          "install-server": true,
+          "allow-pw": false,
+          "import-id": ["{{ ssh_import_id }}"]
+        }
+      }
+    }
+  ]
+}
+```
 
 ### Paths
 
@@ -1098,9 +1291,9 @@ target:
       changed path; evaluate `assert` operations as they're encountered.
    5. Run generic structural validation (unresolved-marker check; optional
       output-specific document schema).
-   6. Serialize deterministic YAML.
-   7. If the output has a template, inject the serialized YAML into it
-      (replacing `{{ document }}`); otherwise use the serialized YAML
+   6. Serialize deterministically in the output's format.
+   7. If the output has a template, inject the serialized document into it
+      (replacing `{{ document }}`); otherwise use the serialized document
       directly.
    8. Write the result to that output's configured path (`{target}`
       substituted), using a temporary file and atomic rename.
@@ -1244,8 +1437,8 @@ cannot merge mapping into list at /autoinstall/user-data/packages
 
 ## Validation
 
-There are four clearly separable validation concerns. Only the first two are
-built into the renderer; the last two are supplied by the project.
+There are five clearly separable validation concerns. Only the first three
+are built into the renderer; the last two are supplied by the project.
 
 1. **Input validation (built in).** Every module/inventory document is
    validated against `schemas/document.schema.json` plus structural rules
@@ -1263,7 +1456,18 @@ built into the renderer; the last two are supplied by the project.
    its rendered document against that JSON schema. The renderer contains
    **no** hard-coded structural expectations (no `autoinstall.version`, no
    required `identity`/`ssh`/`storage`/`network` rules).
-3. **Document assertions (project supplied, via fragments).** Any
+3. **Serialization (built in).** Runs on the rendered document, after generic
+   validation and before the file is written: a value the output's `format`
+   cannot express (a null for `toml`, a non-finite float for `json`) fails
+   closed naming the output and the JSON Pointer path (see "Supported
+   formats"). If the output has a `template`, and its format is `toml` or
+   `json`, the composed text is re-parsed and required to still equal the
+   serialized document — the same fail-closed check, applied to what a
+   template might have changed (see "Serialization" below). This step has
+   its own exit code (`9`, see "Exit codes"), distinct from generic
+   validation failing: the document can be structurally correct and simply
+   inexpressible in one particular target format.
+4. **Document assertions (project supplied, via fragments).** Any
    document-specific structural requirement is expressed as `assert`
    operations in fragments. The example project's `autoinstall` module ships
    a `checks` fragment asserting the autoinstall structure, and per-hardware
@@ -1281,7 +1485,7 @@ built into the renderer; the last two are supplied by the project.
    (see "Aggregate outputs"), which runs once after every contributing
    target. `schema` and named validators remain available for whole-document
    *shape* checks either way.
-4. **Named validators (project supplied, external).** Any document in the
+5. **Named validators (project supplied, external).** Any document in the
    closure may declare named validators; select them with a repeatable
    `--validator NAME` (if none given, the output's default validators run).
    Each runs an external command against the written output file and fails
@@ -1291,14 +1495,19 @@ built into the renderer; the last two are supplied by the project.
 fragmint validate gb10-01 --validator subiquity
 ```
 
-## YAML serialization
+## Serialization
 
-Output is stable and diff-friendly:
+Every format's output is deterministic and diff-friendly: mapping insertion
+order is preserved (never sort keys, subject to each format's own syntactic
+constraints — see TOML below), and a file ends with exactly one trailing
+newline. Any header such as `#cloud-config` comes from the output template,
+not the serializer.
 
-- preserve mapping insertion order (never sort keys);
+**YAML.**
+
 - two-space indentation;
 - never emit Python-specific YAML tags;
-- Booleans as `true`/`false`;
+- booleans as `true`/`false`;
 - quote a string whenever leaving it bare would change its type for a YAML
   1.1 reader — the emitter targets YAML 1.2, but common consumers, including
   cloud-init's PyYAML-based parser, parse YAML 1.1, where values such as
@@ -1306,11 +1515,61 @@ Output is stable and diff-friendly:
   strings. The YAML 1.1 spec decides this, not any one parser's leniency, so a
   value some readers would tolerate bare is still quoted; otherwise leave
   strings unquoted;
-- prefer block style for multiline strings;
-- end files with exactly one newline.
+- prefer block style for multiline strings.
 
-Any header such as `#cloud-config` comes from the output template, not the
-serializer.
+**JSON.**
+
+- insertion order preserved, never sorted;
+- two-space indentation;
+- raw UTF-8 (non-ASCII characters are not escaped);
+- a non-finite float (`nan`/`inf`/`-inf`) has no JSON representation and
+  fails closed naming the JSON Pointer path (see "Supported formats" and
+  "Validation").
+
+**TOML.**
+
+- insertion order preserved **within one table**, for its own scalar keys,
+  arrays of scalars, and inline values; that table's sub-tables and
+  arrays-of-tables follow, themselves in insertion order relative to each
+  other. This is a requirement of TOML's grammar — a `[sub]` header commits
+  every following `key = value` to `sub`, so a table's scalar keys must
+  precede its sub-tables in the emitted text. fragmint never sorts keys in
+  any format; this is the one format where insertion order alone cannot
+  fully determine the emitted layout.
+- two-space array indentation, matching YAML/JSON;
+- raw UTF-8;
+- a multi-line string uses TOML's `"""` form when the document contains no
+  bare `\r` anywhere; if it does, *every* multi-line string in that document
+  falls back to a single-line, escaped form instead, since TOML's writer
+  controls this choice per document, not per string, and `"""` strings
+  normalize `\r\n` to `\n` on parse — the fallback keeps the value byte-exact
+  instead of silently changing it. The choice is a pure function of the
+  data, so identical data always produces identical bytes.
+- null has no TOML representation and fails closed naming the JSON Pointer
+  path and the remedy (`op: remove` instead), rather than being dropped or
+  coerced (see "Supported formats" and "Validation"). A `remove` operation
+  never itself introduces a null — it deletes the key outright — so this can
+  only arise from a fragment that explicitly writes one.
+- non-finite floats (`nan`/`inf`/`-inf`) ARE representable in TOML 1.0 and
+  are written as such.
+- a whole-document-empty output is an empty file (`tomli_w` emits an empty
+  string for `{}`, and the shared "exactly one trailing newline" rule turns
+  that into a single newline byte) — this cannot arise in practice, since an
+  output with no contributing fragments is never produced at all (see
+  "Fragment order").
+
+**Output templates and non-YAML formats.** A template is format-neutral
+text (see "The module model" — "Outputs and validators across the closure"),
+not something the renderer parses — which is exactly right for a TOML
+comment banner (`#`-prefixed lines are valid TOML) but risky for JSON, which
+admits neither comments nor trailing content. For `format: toml` and
+`format: json` outputs only, the composed text (after template substitution)
+is re-parsed and required to equal the document that was serialized; a
+template that breaks parsing or changes the data fails closed naming the
+output and the template file. YAML has no such check — a YAML template
+inserting non-comment prose already produces a file the tool never re-reads,
+and this asymmetry preserves that existing behavior rather than making it a
+new error.
 
 ## CLI usage
 
@@ -1347,9 +1606,11 @@ fails, without leaving a partially written output file for a failed target
 (atomic temp-file + rename).
 
 `list` is a command group: `list targets`, `list fragments` (qualified refs,
-by document in closure order), `list groups`, `list outputs` (name, scope,
-defining document), and `list modules` (name, path, and the document that
-first imported it).
+by document in closure order, in every supported input format — a stem
+matching more than one format is reported as an error rather than silently
+listing one), `list groups`, `list outputs` (name, scope, defining
+document), and `list modules` (name, path, and the document that first
+imported it).
 
 **Multi-output selection (`render`, `validate`, `explain`).** With no
 `--only`, `render`/`validate`/`explain` act on every `scope: target` output
@@ -1364,17 +1625,23 @@ all: a *different* output's secrets, captures, schema, or `assert` never run
 and can never fail the command (see "Resolution timing"). Two flags can only
 ever apply to one output at a time:
 
-- `--stdout` prints one output's text. With `--only`, that's the one printed.
+- `--stdout` prints one output's text, in that output's own configured
+  format (see "Supported formats"). With `--only`, that's the one printed.
   Without it: a target producing exactly one output prints that one; a
   target producing several falls back to the closure's `default_output`
   (README.md "The module model" — "Outputs and validators across the
   closure"); with several and no default, it's a config error listing the
   available output names.
-- `--output PATH` overrides the destination path for one output. It requires
-  either `--only` or a target that produces exactly one output — with
-  several and no `--only`, it's a config error (there's no default fallback
-  here, unlike `--stdout`, since silently picking a path for the "default"
-  output while ignoring the others would be surprising for a file-write).
+- `--output PATH` overrides the destination path for one output. It
+  redirects where the bytes land; it does **not** reinterpret what they
+  are — naming a path ending in `.json` does not make the output JSON if
+  its configured format is something else (that's what `format:` on the
+  output itself is for; see "The module model" — "Outputs and validators
+  across the closure"). It requires either `--only` or a target that
+  produces exactly one output — with several and no `--only`, it's a config
+  error (there's no default fallback here, unlike `--stdout`, since silently
+  picking a path for the "default" output while ignoring the others would
+  be surprising for a file-write).
 
 All diagnostics (warnings, errors, progress) go to stderr regardless of
 `--stdout`.
@@ -1424,10 +1691,15 @@ epilogue `assert` would fail during a real render.
 `0` success · `1` render failure · `2` usage · `3` target resolution (unknown
 target, undefined group, reserved variable name in a target or in the
 aggregate scope, unreadable secrets file) ·
-`4` fragment validation · `5` merge conflict · `6` rendered-document validation
+`4` fragment validation (including an unresolvable or ambiguous fragment
+reference) · `5` merge conflict · `6` rendered-document validation
 (generic check, schema, assertion, or validator) · `7` module error (a document
-is missing or invalid, or its import closure is inconsistent) ·
-`8` variable-resolution failure (secret not found / capture failed).
+is missing or invalid, or its import closure is inconsistent, including an
+unknown output `format:`) ·
+`8` variable-resolution failure (secret not found / capture failed) ·
+`9` serialization failure (a value the output's format cannot express, or an
+output template that makes the composed text invalid in that format — see
+"Supported formats" and "Serialization").
 
 Codes `3` and `7` divide along *when* the failure happens: `7` is loading the
 documents and their import closure, `3` is resolving a target against the
@@ -1572,14 +1844,21 @@ list entries; key-aware list merges; variables that reference other
 variables; automatic hardware discovery; PXE/TFTP/DHCP configuration;
 deployment to HTTP servers; secret-manager integration (the secret store is a
 plain file); reimplementing any full document schema (e.g. Subiquity);
-running Ansible; installing Ubuntu. The renderer's job is to produce correct,
-inspectable YAML artifacts.
+running Ansible; installing Ubuntu; multi-format support for the tool's own
+documents (the inventory, module documents, and the secrets overlay are YAML
+only — see "Supported formats"). The renderer's job is to produce correct,
+inspectable structured-document artifacts.
 
 Room for future extension: PXE/iPXE script generation; publishing to an HTTP
 directory; secret retrieval from a password manager; target enrollment
 states; additional built-in validators; schema-aware validation for multiple
-document families; encrypted outputs; fragment deprecation warnings; fragment
-dependency declarations; optional fragment conditions.
+document families (distinct from multi-format *serialization*, which is
+already supported); encrypted outputs; fragment deprecation warnings;
+fragment dependency declarations; optional fragment conditions; multi-format
+support for the inventory/module/secrets documents themselves; a `--format`
+override flag that would reinterpret `--output`'s destination rather than
+just redirect it; making YAML input's silent date/time stringification fail
+closed the way TOML input already does.
 
 ## Development
 

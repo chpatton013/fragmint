@@ -20,6 +20,10 @@ fragmint render <target> --output tests/fixtures/expected/<target>/user-data
 ```
 
 Review the diff before committing — the snapshot is the reviewed contract.
+All of these snapshots are YAML and are not touched by multi-format work
+(README.md "Supported formats"); TOML/JSON input and output cases are
+covered by synthetic trees (the `closure_from_tree` fixture) in the test
+suite instead, precisely so `example/` stays untouched as this corpus.
 
 `tests/fixtures/expected/ansible-inventory.yaml` is the analogous snapshot for
 the example project's `scope: aggregate` output (README.md "Aggregate
