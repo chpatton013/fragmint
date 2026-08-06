@@ -68,6 +68,7 @@ from typing import Any, Literal, cast
 import jsonschema
 
 from .errors import ModuleError
+from .formats import load_data_file
 from .models import (
     AggregateFragments,
     GroupDefinition,
@@ -79,7 +80,6 @@ from .models import (
     ValidatorSpec,
     Variables,
 )
-from .yamlio import load_file
 
 #: The only document version supported by this release.
 SUPPORTED_DOCUMENT_VERSION = 1
@@ -338,14 +338,14 @@ def _load_document(doc_path: Path, *, name: str | None) -> Document:
         raise ModuleError(f"{kind} document not found: {doc_path}")
 
     try:
-        raw = load_file(doc_path)
+        raw = load_data_file(doc_path)
     except Exception as exc:
         raise ModuleError(f"cannot parse document {doc_path}: {exc}") from exc
 
     if not isinstance(raw, dict):
         raise ModuleError(f"document {doc_path} must be a mapping")
 
-    schema: dict[str, Any] = cast(dict[str, Any], load_file(_schema_path("document.schema.json")))
+    schema: dict[str, Any] = cast(dict[str, Any], load_data_file(_schema_path("document.schema.json")))
     try:
         jsonschema.validate(instance=raw, schema=schema)
     except jsonschema.ValidationError as exc:

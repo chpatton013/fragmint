@@ -29,6 +29,10 @@ DataValue = (
     | dict[str, "DataValue"]
 )
 
+#: The input and output file formats fragmint understands. See
+#: :mod:`fragmint.formats`.
+Format = Literal["yaml", "toml", "json"]
+
 #: The flat variable map used for template rendering and required-variable
 #: checks. After resolution these are concrete :data:`DataValue`s; before
 #: resolution a value may instead be an untagged literal or a ``from:`` source

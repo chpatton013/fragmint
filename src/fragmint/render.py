@@ -38,8 +38,8 @@ from collections.abc import Collection, Sequence
 from dataclasses import replace
 from pathlib import Path
 
+from . import formats, merge, modules, sources, templating, validation
 from . import fragments as fragments_mod
-from . import merge, modules, sources, templating, validation, yamlio
 from . import pointer as pointer_mod
 from .errors import FragmintError, InventoryError, ModuleError, TemplateRenderError
 from .inventory import RESERVED_VARIABLE_NAMES, load_secret_store, resolve_target
@@ -62,7 +62,8 @@ from .provenance import ProvenanceTracker
 from .sources import CommandRunner
 
 #: Literal token an output template may contain; replaced by the serialized
-#: YAML during :func:`compose_output`. See README.md "The module model".
+#: document, in the output's own format, during :func:`compose_output`. See
+#: README.md "The module model".
 DOCUMENT_TOKEN = "{{ document }}"
 
 #: Substring patterns that mark a variable name for redaction in ``inspect``
@@ -719,15 +720,15 @@ def compose_output(result: RenderedOutput, output: OutputSpec) -> str:
     """Produce the final output text for one rendered output.
 
     Serialize ``result.document`` deterministically via
-    :func:`fragmint.yamlio.dump_str`. If ``output.template`` is set, read that
-    file and replace the literal :data:`DOCUMENT_TOKEN` with the serialized
-    YAML; otherwise use the serialized YAML verbatim. This is how a project adds
-    a header such as ``#cloud-config``. Ends with a single trailing newline.
-    Scope-agnostic: works identically for a per-target or an aggregate result
-    (README.md "Aggregate outputs": the aggregate path adds no new
-    serialization or templating code).
+    :func:`fragmint.formats.dump_document`. If ``output.template`` is set,
+    read that file and replace the literal :data:`DOCUMENT_TOKEN` with the
+    serialized document; otherwise use it verbatim. This is how a project
+    adds a header such as ``#cloud-config``. Ends with a single trailing
+    newline. Scope-agnostic: works identically for a per-target or an
+    aggregate result (README.md "Aggregate outputs": the aggregate path adds
+    no new serialization or templating code).
     """
-    text = yamlio.dump_str(result.document)
+    text = formats.dump_document(result.document, "yaml")
 
     if output.template:
         template_text = Path(output.template).read_text(encoding="utf-8")

@@ -27,8 +27,8 @@ from typing import Any, cast
 import jsonschema
 
 from .errors import FragmentError, UnknownFragmentError
+from .formats import load_data_file
 from .models import Fragment, FragmentOperation
-from .yamlio import load_file
 
 #: The only fragment format version supported by this release.
 SUPPORTED_FRAGMENT_VERSION = 1
@@ -121,14 +121,14 @@ def load_fragment(path: Path, name: str) -> Fragment:
         raise UnknownFragmentError(f"fragment {name!r} not found (expected at {path})")
 
     try:
-        raw = load_file(path)
+        raw = load_data_file(path)
     except Exception as exc:
         raise FragmentError(f"cannot parse fragment {name} ({path}): {exc}") from exc
 
     if not isinstance(raw, dict):
         raise FragmentError(f"fragment {name} ({path}) must be a mapping")
 
-    schema: dict[str, Any] = cast(dict[str, Any], load_file(_schema_path("fragment.schema.json")))
+    schema: dict[str, Any] = cast(dict[str, Any], load_data_file(_schema_path("fragment.schema.json")))
     try:
         jsonschema.validate(instance=raw, schema=schema)
     except jsonschema.ValidationError as exc:

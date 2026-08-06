@@ -19,8 +19,8 @@ from typing import Any, cast
 import jsonschema
 
 from .errors import InventoryError, UnknownTargetError
+from .formats import load_data_file
 from .models import Project, Ref, ResolvedTarget, SecretStore, Variables
-from .yamlio import load_file
 
 #: Variable names the renderer sets automatically; a project must not define
 #: them itself (README.md "Variable precedence"). ``target`` is injected here,
@@ -150,14 +150,14 @@ def load_secret_store(path: Path) -> SecretStore:
         raise InventoryError(f"secrets file not found: {path}")
 
     try:
-        raw = load_file(path)
+        raw = load_data_file(path)
     except Exception as exc:
         raise InventoryError(f"cannot parse secrets file {path}: {exc}") from exc
 
     if not isinstance(raw, dict):
         raise InventoryError(f"secrets file {path} must be a mapping")
 
-    schema: dict[str, Any] = cast(dict[str, Any], load_file(_schema_path("secrets.schema.json")))
+    schema: dict[str, Any] = cast(dict[str, Any], load_data_file(_schema_path("secrets.schema.json")))
     try:
         jsonschema.validate(instance=raw, schema=schema)
     except jsonschema.ValidationError as exc:

@@ -25,12 +25,12 @@ from typing import cast
 
 import click
 
+from . import formats
 from . import inventory as inventory_mod
 from . import modules as modules_mod
 from . import pointer as pointer_mod
 from . import render as render_mod
 from . import validation as validation_mod
-from . import yamlio
 from .errors import FragmintError, ModuleError
 from .exit_codes import ExitCode
 from .models import (
@@ -985,7 +985,7 @@ def inspect(
             ),
             "variables": cast(DataValue, redacted_variables),
         }
-        click.echo(yamlio.dump_str(aggregate_doc), nl=False)
+        click.echo(formats.dump_document(aggregate_doc, "yaml"), nl=False)
         return
 
     resolved = inventory_mod.resolve_target(
@@ -1007,7 +1007,7 @@ def inspect(
         ),
         "variables": cast(DataValue, redacted_variables),
     }
-    click.echo(yamlio.dump_str(output_doc), nl=False)
+    click.echo(formats.dump_document(output_doc, "yaml"), nl=False)
 
 
 def main(argv: list[str] | None = None) -> int:

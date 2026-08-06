@@ -11,7 +11,7 @@ failed:
 1. input validation (inventory/fragment/config schemas — in their own modules);
 2. generic rendered-document validation (:func:`check_unresolved_markers`,
    :func:`validate_against_schema`);
-3. YAML parsing (handled in :mod:`yamlio`);
+3. document parsing (handled in :mod:`formats`);
 4. external named validators (:func:`run_validator`).
 """
 
@@ -24,8 +24,8 @@ from typing import Any
 import jsonschema
 
 from .errors import ValidationError
+from .formats import load_data_file
 from .models import DataValue
-from .yamlio import load_file
 
 #: Bounded timeout (seconds) for an external validator subprocess.
 VALIDATOR_TIMEOUT = 60.0
@@ -72,7 +72,7 @@ def validate_against_schema(document: DataValue, schema_path: Path) -> None:
     if not schema_path.is_file():
         raise ValidationError(f"document schema not found: {schema_path}")
 
-    schema: dict[str, Any] = load_file(schema_path)  # type: ignore[assignment]
+    schema: dict[str, Any] = load_data_file(schema_path)  # type: ignore[assignment]
     try:
         jsonschema.validate(instance=document, schema=schema)
     except jsonschema.ValidationError as exc:
