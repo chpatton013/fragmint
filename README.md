@@ -190,6 +190,7 @@ There are two kinds of document, sharing one schema
 | Attach fragments to any output in the closure (`defaults`) | yes | yes |
 | Define `groups` (variables + per-output fragments) | yes | yes |
 | Define `validators` | yes | yes |
+| Declare an aggregate prologue/epilogue and aggregate variables (`aggregate`) | yes | yes |
 | Define `targets` | **no** | **yes — only here** |
 
 A module is "everything except targets." The **inventory** is the render
@@ -278,6 +279,12 @@ attach to them:
 - `default: true` — at most one across the whole closure.
 - **Validators** may be declared by any document; they union across the
   closure by name, and a duplicate name is an error.
+- Any document may **attach an aggregate prologue/epilogue** (its
+  `aggregate.outputs.<name>.prologue`/`epilogue`) to any `scope: aggregate`
+  output in the closure, whether it defined that output or not — see
+  "Aggregate outputs" below. Naming an output undefined anywhere in the
+  closure, or one with `scope: target`, is an error naming both the document
+  and the output.
 
 `outputs` across the closure must be non-empty. When there's exactly one,
 it's the implicit default even without `default: true`; with several, at
@@ -373,6 +380,23 @@ targets:
       identity_hostname: gb10-01
       identity_password_hash: "$6$example-salt$example-hash"
       primary_interface: enP7s7
+```
+
+An `aggregate:` block, legal in any document in the closure (a module's
+`yaml-frag.yaml` or the inventory), attaches fragments that run once for a
+`scope: aggregate` output — before any target contributes (`prologue`) or
+after every contributing target has (`epilogue`) — plus variables scoped to
+that composition, independent of any target (see "Aggregate outputs" below):
+
+```yaml
+# modules/ansible/yaml-frag.yaml
+aggregate:
+  variables:
+    ansible_ssh_user: chris          # closure-wide, target-independent
+  outputs:
+    ansible-inventory:
+      prologue: [ansible/skeleton]   # before any target contributes
+      epilogue: [ansible/checks]     # after every target has contributed
 ```
 
 A **target** is any named thing you want to render a document for (a machine,
@@ -474,6 +498,25 @@ after every other layer (including CLI overrides), defining a variable named
 `--var target=...`/`--var output=...`) is a fail-closed `InventoryError`
 rather than being silently discarded.
 
+### The aggregate scope
+
+A prologue/epilogue fragment (see "Aggregate outputs" below) does not run for
+any one target, so it gets its own, smaller variable map — two layers, later
+wins:
+
+1. every module's and the inventory's `defaults.variables`, in closure order;
+2. every `aggregate.variables`, in closure order.
+
+Group variables, target variables, and `--var` are **not** in scope here —
+all three are target-scoped by definition, and this composition is not.
+`output` is set, the same as everywhere else, to the current output's own
+name. `target` is deliberately **not** set: this scope runs once, outside the
+per-target loop, so there is no single target to name. A prologue/epilogue
+fragment referencing `{{ target }}`, or declaring `requires: variables:
+[target]`, therefore fails closed with the usual strict-undefined error.
+Defining `target` or `output` in either layer is the same fail-closed
+`InventoryError` as in the per-target scope.
+
 ## Aggregate outputs
 
 Every output described so far has `scope: target` (the default): one document
@@ -527,19 +570,33 @@ Aggregate scope reuses every other mechanism in this tool:
   contributing no fragments for the aggregate output contributes nothing to
   the document — that's its opt-out. If *no* target contributes, the output is
   not produced at all (same rule as "Fragment order": an output nothing feeds
-  is never written). Putting a fragment in `defaults` opts every target in at
-  once; putting it in a group opts in that group's members.
-- **Ordering is two-level and purely positional**, applied across targets as
-  well as within one:
-  1. **Targets**, in inventory declaration order — never sorted, exactly like
+  is never written) — and in that case a prologue/epilogue is skipped
+  entirely too; declaring one does not, by itself, make an output produced.
+  Putting a fragment in `defaults` opts every target in at once; putting it
+  in a group opts in that group's members.
+- **Ordering is purely positional**, applied across a prologue and an
+  epilogue as well as across targets, and across targets as well as within
+  one:
+  1. This output's **prologue** — every document's
+     `aggregate.outputs.<name>.prologue`, in closure order (dependencies
+     before their importers, the inventory last, same as everywhere else in
+     this tool) — applied once, before any target contributes.
+  2. **Targets**, in inventory declaration order — never sorted, exactly like
      every other targets-in-order rule in this tool.
-  2. **Fragments within a target**, in that target's resolved order for the
+  3. **Fragments within a target**, in that target's resolved order for the
      output (defaults -> groups -> target), exactly as for a per-target
      output.
+  4. This output's **epilogue** — every document's
+     `aggregate.outputs.<name>.epilogue`, in closure order — applied once,
+     after every contributing target.
 
-  A later target's write can override an earlier target's contribution at the
-  same path, and the renderer never reorders — including never sorting hosts
-  in the output. If you want hosts alphabetized, order the inventory.
+  Precedence remains purely positional across all four: a target's write
+  overrides a prologue write at the same path, and an epilogue's write
+  overrides any target's; the renderer never reorders — including never
+  sorting hosts in the output. If you want hosts alphabetized, order the
+  inventory. Closure order also means a dependency's prologue precedes its
+  importer's, and the inventory's — as root, last in closure order — is last
+  in both the prologue and the epilogue.
 - **Templated operation paths put the target where it belongs: in a
   position, not a value.** `{{ target }}` (and any other variable) may appear
   in an operation's `path`, not just its `value` — see "Paths" below. This is
@@ -553,12 +610,17 @@ Aggregate scope reuses every other mechanism in this tool:
 - **Provenance and override warnings identify the contributing target.**
   Because the same fragment applies once per contributing target,
   "`ansible:host` operation 0" alone does not identify a single write. Every
-  provenance entry produced
-  during aggregate rendering carries the contributing target's name (`None`
-  for per-target rendering, where it would be redundant); `explain` shows it
-  as a parenthetical, and an override warning names both the previous and the
-  new target — which, for an aggregate document, is exactly the "two targets
-  claimed the same host key" bug you want reported:
+  provenance entry produced while applying a target's own fragments during
+  aggregate rendering carries that target's name (`None` for per-target
+  rendering, where it would be redundant); an epilogue entry also carries no
+  target — it runs once, outside the per-target loop, so no single target
+  identifies it either. `explain` shows the target as a parenthetical when
+  there is one, so a `source:`/`contributors:` line *without* a `(target
+  NAME)` parenthetical in an aggregate output's section is precisely an
+  epilogue write. An override warning names both the previous and the new
+  source, with a target parenthetical on whichever side has one — which, for
+  two targets colliding, is exactly the "two targets claimed the same host
+  key" bug you want reported:
 
   ```text
   [ansible-inventory] warning: ansible:host operation 0 replaced
@@ -568,19 +630,45 @@ Aggregate scope reuses every other mechanism in this tool:
   ```
 
 **The partial-document assertion caveat.** An `assert` operation inside a
-fragment contributing to an aggregate output runs during *that target's*
-turn in the loop, so it only ever sees the **partial** document built so far
-(through the current target) — never the finished, whole-run document. This
-is a real footgun: a trailing fragment whose whole job is to assert the fully
-composed document is correct (the idiom the `autoinstall` module's own
-`checks` fragment uses for `user-data`) does **not** work for an aggregate
+fragment contributing to an aggregate output *through a target* runs during
+*that target's* turn in the loop, so it only ever sees the **partial**
+document built so far (through the current target) — never the finished,
+whole-run document. This is a real footgun: a trailing fragment whose whole
+job is to assert the fully composed document is correct (the idiom the
+`autoinstall` module's own `checks` fragment uses for `user-data`) does
+**not** work when placed among a target's own fragments for an aggregate
 output, because there is no single target whose "last fragment" runs after
-every other target. Whole-document validation for an aggregate output must
-instead go through that output's `schema` or a named validator — both of
-which run on the *finished* document, after every contributing target has
-been applied (see "Validation"). The example project's `ansible-inventory`
-output demonstrates this: the `ansible` module sets `schema:
-ansible-inventory.schema.json` instead of relying on a checks fragment.
+every other target.
+
+**Prologue and epilogue: whole-document fragments.** An `aggregate:` block —
+legal in any document in the closure — attaches fragments that run once,
+outside the per-target loop, on the same shared document:
+
+```yaml
+aggregate:
+  variables:
+    ansible_ssh_user: chris          # closure-wide, target-independent
+  outputs:
+    ansible-inventory:
+      epilogue: [checks]             # after every target has contributed
+```
+
+An **epilogue** fragment is the remedy for the caveat above: it runs once,
+after every contributing target, so its `assert` operations see the finished
+document — this is what lets a project ship the same trailing-assertion
+idiom for an aggregate output that a target-scoped output already enjoys.
+Epilogue assertions run during composition, not validation, so they are not
+suppressed by `--no-validate`. An aggregate output's `schema` and any named
+validators remain the right tool for whole-document *shape* checks; an
+epilogue assertion is the right tool for a whole-document *fact* a schema
+cannot state, such as a specific group actually being present in the
+composed document.
+
+An aggregate prologue/epilogue fragment does not identify a contributing
+target — it isn't one — so `{{ target }}` is undefined there (see "The
+aggregate scope" above); use `{{ output }}` for the output's own name.
+Prologue/epilogue alone, with no target contributing, does not produce the
+output — see the not-produced rule below.
 
 **Load-time rules** (README.md "The module model"): an aggregate output's
 `path` must not contain `{target}` (it's a single fixed path, not a
@@ -974,11 +1062,16 @@ output file(s) the closure declares for a given target — it never forces
 companion files beyond what the closure routes fragments to.
 
 **Aggregate output** (`scope: aggregate`) — a second, small composition loop
-over the *whole run* instead of one target; see "Aggregate outputs" above for
-the full algorithm, ordering rules, and the partial-document assertion
-caveat. Generic validation, serialization, output templating, writing, and
-validators are identical to the per-target case above — only how the
-document itself gets built differs.
+over the *whole run* instead of one target: each contributing target's
+resolved fragment list, in inventory declaration order, applied to one shared
+document; then this output's `aggregate.outputs.<name>.epilogue`, applied
+once, after every contributing target has. See "Aggregate outputs" above for
+the full ordering rules and the partial-document assertion caveat. Epilogue
+`assert` operations run as part of this composition step, not the generic
+validation step below, so they are unaffected by `--no-validate`. Generic
+validation, serialization, output templating, writing, and validators are
+otherwise identical to the per-target case above — only how the document
+itself gets built differs.
 
 ## Provenance and `explain`
 
@@ -1068,6 +1161,16 @@ outputs"):
   new source: ansible:host (target gb10-01-dup)
 ```
 
+A prologue or epilogue write involved in the same warning names only the side
+that has a target — a target overriding a prologue write, or an epilogue
+overriding a target's write, shows the parenthetical on the target side only:
+
+```text
+[ansible-inventory] warning: ansible:host operation 0 replaced /all/hosts/gb10-01
+  previous source: ansible:skeleton
+  new source: ansible:host (target gb10-01)
+```
+
 A `merge` encountering an incompatible type fails instead:
 
 ```text
@@ -1102,13 +1205,14 @@ built into the renderer; the last two are supplied by the project.
    operations in fragments. The example project's `autoinstall` module ships
    a `checks` fragment asserting the autoinstall structure, and per-hardware
    fragments assert their own additions (e.g. `network.version == 2`).
-   Assertions run as part of rendering and fail closed. **This does not work
-   for `scope: aggregate` outputs**: an `assert` inside an aggregate fragment
-   only ever sees the partial document built so far (through the current
-   target), never the finished whole-run document — see "Aggregate outputs".
-   Use `schema` or a named validator for whole-document checks on an
-   aggregate output instead; the example project's `ansible-inventory` output
-   does exactly this.
+   Assertions run as part of rendering and fail closed. **For `scope:
+   aggregate` outputs**, an `assert` placed among a target's own fragments
+   still only ever sees the partial document built so far (through the
+   current target), never the finished whole-run document; a whole-document
+   assertion instead goes in that output's `aggregate.outputs.<name>.epilogue`
+   (see "Aggregate outputs"), which runs once after every contributing
+   target. `schema` and named validators remain available for whole-document
+   *shape* checks either way.
 4. **Named validators (project supplied, external).** Any document in the
    closure may declare named validators; select them with a repeatable
    `--validator NAME` (if none given, the output's default validators run).
@@ -1218,7 +1322,8 @@ literal values (captures are still never executed for inspection).
 ### Exit codes
 
 `0` success · `1` render failure · `2` usage · `3` target resolution (unknown
-target, undefined group, reserved variable name, unreadable secrets file) ·
+target, undefined group, reserved variable name in a target or in the
+aggregate scope, unreadable secrets file) ·
 `4` fragment validation · `5` merge conflict · `6` rendered-document validation
 (generic check, schema, assertion, or validator) · `7` module error (a document
 is missing or invalid, or its import closure is inconsistent) ·
@@ -1250,10 +1355,12 @@ routing and both output scopes in practice:
 - `example/modules/ansible/yaml-frag.yaml` owns the aggregate
   `ansible-inventory` output (`scope: aggregate`; `path:
   rendered/inventory.yaml`, a single fixed file for the whole run; `schema:
-  ansible-inventory.schema.json` for whole-document validation — see
-  "Aggregate outputs" for why an aggregate output can't use the
-  trailing-assertion-fragment idiom the other two do), its
-  `defaults.outputs.ansible-inventory.fragments: [host]`, and a `gb10`/
+  ansible-inventory.schema.json` for whole-document shape validation), its
+  `defaults.outputs.ansible-inventory.fragments: [host]`, an
+  `aggregate.outputs.ansible-inventory.epilogue: [checks]` for a
+  whole-document fact the schema cannot express (see "Aggregate outputs" for
+  why this, rather than the trailing-assertion-fragment idiom the other two
+  outputs use, is how an aggregate output gets that check), and a `gb10`/
   `generic_vm` group setting `ansible_group` — each merges with the
   same-named group the `autoinstall` module and the inventory itself
   contribute to (README.md "Composition and ordering"). Each target sets
@@ -1271,7 +1378,10 @@ routing and both output scopes in practice:
   builds the `ansible-inventory` document, one target at a time, using a
   templated operation *path* (`/all/children/{{ ansible_group }}/hosts/{{
   target }}`) to place each contributing target under its own key of the
-  shared document.
+  shared document; `example/modules/ansible/fragments/ansible/checks.yaml`
+  runs once, as that output's epilogue, after every contributing target, and
+  asserts that the `gb10` group the module ships is actually populated in the
+  finished document.
 - Each target's `identity_password_hash` is a `capture` source that runs
   `openssl passwd -6` over the plaintext password held in the secret store
   (`example/secrets.example.yaml` shows the shape).

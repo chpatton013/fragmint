@@ -28,6 +28,11 @@ from .yamlio import load_file
 #: is injected later, once per output, in :func:`yaml_frag.render.render_target`
 #: (it differs per output within the same target) — but conflicts with it are
 #: still rejected here, at the single point where all variable layers merge.
+#: The aggregate scope is the other injection site for ``output`` (set to the
+#: aggregate output's own name) and the other place the conflict is rejected
+#: — see :meth:`yaml_frag.render.RenderSession.aggregate_variables`, where
+#: ``target`` is deliberately never injected at all (README.md "Aggregate
+#: outputs" — "The aggregate scope").
 RESERVED_VARIABLE_NAMES = frozenset({"target", "output"})
 
 

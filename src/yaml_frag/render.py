@@ -40,8 +40,8 @@ from pathlib import Path
 from . import fragments as fragments_mod
 from . import merge, modules, sources, templating, validation, yamlio
 from . import pointer as pointer_mod
-from .errors import ModuleError, TemplateRenderError, YamlFragError
-from .inventory import load_secret_store, resolve_target
+from .errors import InventoryError, ModuleError, TemplateRenderError, YamlFragError
+from .inventory import RESERVED_VARIABLE_NAMES, load_secret_store, resolve_target
 from .models import (
     Fragment,
     OutputSpec,
@@ -209,6 +209,7 @@ class RenderSession:
         self._resolved: dict[str, ResolvedTarget] = {}
         self._variables: dict[str, Variables] = {}
         self._fragments: dict[Ref, Fragment] = {}
+        self._aggregate_variables: Variables | None = None
 
     def resolve(self, target_name: str) -> ResolvedTarget:
         """Resolve ``target_name``'s per-output fragment order and layered
@@ -236,6 +237,39 @@ class RenderSession:
             )
         return self._variables[target_name]
 
+    def aggregate_variables(self) -> Variables:
+        """The aggregate scope's source-resolved variables (README.md
+        "Variable precedence" — "The aggregate scope"): every module's and the
+        inventory's ``defaults.variables`` (closure order), then every
+        ``aggregate.variables`` (closure order, later wins), with sources
+        resolved. ``target`` is deliberately absent — this scope is not a
+        function of any one target — so ``{{ target }}`` in a prologue/
+        epilogue fragment raises a strict-undefined :class:`TemplateRenderError`.
+        Memoized for the life of the session. Raises
+        :class:`~yaml_frag.errors.InventoryError` if either layer defines the
+        reserved ``target``/``output`` name.
+        """
+        if self._aggregate_variables is None:
+            layered: Variables = dict(self.project.default_variables)
+            layered.update(self.project.aggregate_variables)
+            reserved_conflicts = RESERVED_VARIABLE_NAMES & layered.keys()
+            if reserved_conflicts:
+                raise InventoryError(
+                    f"aggregate scope: variable name(s) "
+                    f"{', '.join(f'`{name}`' for name in sorted(reserved_conflicts))} "
+                    f"are reserved (`target` is undefined in this scope; `output` is "
+                    f"set to the aggregate output's own name) and must not be defined "
+                    f"in defaults/aggregate variables"
+                )
+            self._aggregate_variables = sources.resolve_variables(
+                layered,
+                secrets=self.store,
+                runner=self.runner,
+                target="<aggregate scope>",
+                redact=self.redact_sources,
+            )
+        return self._aggregate_variables
+
     def _load_fragment(self, ref: Ref) -> Fragment:
         """Load + validate a fragment by resolved reference, memoized for the
         life of the session (README.md "Aggregate outputs": otherwise a
@@ -251,7 +285,7 @@ class RenderSession:
         doc: dict[str, YamlValue],
         tracker: ProvenanceTracker,
         *,
-        target_name: str,
+        scope_label: str,
         fragment: Fragment,
         variables: Variables,
         provenance_target: str | None,
@@ -260,17 +294,22 @@ class RenderSession:
         check required variables; render each operation's path/value/assertion
         through templating; apply the operation, recording provenance.
 
-        ``provenance_target`` is recorded on every
+        ``scope_label`` is the render scope shown in diagnostics — the
+        target's own name for per-target and aggregate-target rendering, or an
+        ``<aggregate NAME prologue/epilogue>`` label for aggregate composition
+        outside the per-target loop (README.md "Aggregate outputs" — "The
+        aggregate scope"). ``provenance_target`` is recorded on every
         :class:`~models.ProvenanceEntry` produced — ``None`` for per-target
-        rendering (redundant there: there's only one target in play), the
-        contributing target's name for aggregate rendering, where the same
-        fragment runs once per target and "fragment X operation 0" alone no
-        longer identifies a single write (README.md "Aggregate outputs").
+        rendering and for an aggregate prologue/epilogue (redundant or
+        inapplicable there: there's only one target in play, or none), the
+        contributing target's name for aggregate rendering of a target's own
+        fragments, where the same fragment runs once per target and "fragment
+        X operation 0" alone no longer identifies a single write.
         """
         for required_var in fragment.required_variables:
             if required_var not in variables:
                 raise TemplateRenderError(
-                    f"{target_name}: fragment {fragment.name}: missing required "
+                    f"{scope_label}: fragment {fragment.name}: missing required "
                     f"variable {required_var!r}"
                 )
 
@@ -278,14 +317,14 @@ class RenderSession:
             rendered_path = _render_operation_path(
                 op.path,
                 variables,
-                target=target_name,
+                target=scope_label,
                 fragment=fragment.name,
                 operation_index=index,
             )
             rendered_value = templating.render_value(
                 op.value,
                 variables,
-                target=target_name,
+                target=scope_label,
                 fragment=fragment.name,
                 operation_index=index,
             )
@@ -293,7 +332,7 @@ class RenderSession:
                 key: templating.render_value(
                     value,
                     variables,
-                    target=target_name,
+                    target=scope_label,
                     fragment=fragment.name,
                     operation_index=index,
                 )
@@ -356,7 +395,7 @@ class RenderSession:
                 self._apply_fragment(
                     doc,
                     tracker,
-                    target_name=target_name,
+                    scope_label=target_name,
                     fragment=fragment,
                     variables=output_variables,
                     provenance_target=None,
@@ -379,25 +418,34 @@ class RenderSession:
         aggregate``) from every target that contributes to it, for the whole
         run (README.md "Aggregate outputs").
 
-        Targets are visited in inventory declaration order (never sorted); a
-        target that contributes no fragments for this output is simply
-        skipped (its opt-out). For each contributing target, its resolved
-        fragment list for this output is applied to the SHARED document in
-        turn, in that target's fragment order — the same positional-precedence
-        rule as per-target rendering, applied across targets instead of
-        within one, so a later target's write can override an earlier
-        target's contribution at the same path (and an unintended collision
-        surfaces as the normal override warning, now naming both targets).
+        Three phases apply, in order, to one shared document: this output's
+        ``aggregate.outputs.<name>.prologue`` (closure order, once, before any
+        target); each contributing target's resolved fragment list for this
+        output, in inventory declaration order (never sorted) and, within a
+        target, that target's own fragment order — the same
+        positional-precedence rule as per-target rendering, applied across
+        targets instead of within one, so a later target's write can override
+        an earlier target's (or the prologue's) contribution at the same path
+        (and an unintended collision surfaces as the normal override
+        warning, now naming both targets); then this output's
+        ``aggregate.outputs.<name>.epilogue`` (closure order, once, after
+        every contributing target, and able to override any target's write
+        in turn). A target that contributes no fragments for this output is
+        simply skipped (its opt-out).
 
-        Returns ``None`` — nothing to write — if no target contributed
-        (README.md "Fragment order": an output nothing feeds is not
-        produced). Runs generic validation (unresolved-marker check + optional
-        ``output.schema``) on the finished document unless ``validate`` is
-        ``False``; note that any ``assert`` operation inside a fragment
-        contributing to an aggregate output only ever sees the PARTIAL
-        document built so far (up through the current target) — whole-document
-        assertions for an aggregate output must go through ``schema`` or a
-        named validator instead (README.md "Aggregate outputs").
+        Returns ``None`` — nothing to write, and prologue/epilogue are never
+        applied — if no target contributed (README.md "Fragment order": an
+        output nothing feeds is not produced; a prologue/epilogue alone does
+        not make it produced either). Epilogue ``assert`` operations run
+        during this composition, not validation, so they are NOT suppressed
+        by ``validate=False`` — identically to today's per-target trailing-
+        assertion idiom. Generic validation (unresolved-marker check +
+        optional ``output.schema``) still runs on the finished document
+        unless ``validate`` is ``False``. Any ``assert`` operation inside a
+        fragment contributing to an aggregate output *from a target* only
+        ever sees the PARTIAL document built so far (up through the current
+        target) — an epilogue fragment is the remedy (README.md "Aggregate
+        outputs").
         """
         output = self.project.outputs[output_name]
         if output.scope != "aggregate":
@@ -405,17 +453,38 @@ class RenderSession:
                 f"output {output_name!r} has scope {output.scope!r}, not `aggregate`"
             )
 
+        contributing = [
+            target_name
+            for target_name in self.project.targets
+            if self.resolve(target_name).output_fragments.get(output_name)
+        ]
+        if not contributing:
+            return None
+
+        spec = self.project.aggregate_output_fragments.get(output_name)
+        has_outer = spec is not None and bool(spec.prologue or spec.epilogue)
+
         doc: dict[str, YamlValue] = {}
         tracker = ProvenanceTracker()
-        contributed = False
 
-        for target_name in self.project.targets:
-            resolved = self.resolve(target_name)
-            refs = resolved.output_fragments.get(output_name)
-            if not refs:
-                continue
-            contributed = True
+        outer_variables: Variables = {}
+        if has_outer:
+            outer_variables = dict(self.aggregate_variables())
+            outer_variables["output"] = output_name
 
+        for ref in spec.prologue if has_outer and spec is not None else ():
+            fragment = self._load_fragment(ref)
+            self._apply_fragment(
+                doc,
+                tracker,
+                scope_label=f"<aggregate {output_name} prologue>",
+                fragment=fragment,
+                variables=outer_variables,
+                provenance_target=None,
+            )
+
+        for target_name in contributing:
+            refs = self.resolve(target_name).output_fragments[output_name]
             variables: Variables = dict(self.variables(target_name))
             variables["output"] = output_name
 
@@ -424,14 +493,22 @@ class RenderSession:
                 self._apply_fragment(
                     doc,
                     tracker,
-                    target_name=target_name,
+                    scope_label=target_name,
                     fragment=fragment,
                     variables=variables,
                     provenance_target=target_name,
                 )
 
-        if not contributed:
-            return None
+        for ref in spec.epilogue if has_outer and spec is not None else ():
+            fragment = self._load_fragment(ref)
+            self._apply_fragment(
+                doc,
+                tracker,
+                scope_label=f"<aggregate {output_name} epilogue>",
+                fragment=fragment,
+                variables=outer_variables,
+                provenance_target=None,
+            )
 
         if validate:
             self._validate_document(doc, output)

@@ -134,6 +134,19 @@ class GroupDefinition:
 
 
 @dataclass(frozen=True)
+class AggregateFragments:
+    """One aggregate output's prologue/epilogue fragment contribution, already
+    concatenated across the closure in closure order (README.md "Aggregate
+    outputs"). ``prologue`` fragments apply once, before any target
+    contributes; ``epilogue`` fragments apply once, after every contributing
+    target — both outside the per-target loop, on the same shared document.
+    """
+
+    prologue: tuple[Ref, ...] = ()
+    epilogue: tuple[Ref, ...] = ()
+
+
+@dataclass(frozen=True)
 class TargetDefinition:
     """A single target as declared in the inventory (the only document kind
     that may define targets — see README.md "The module model").
@@ -177,6 +190,8 @@ class Project:
     default_output_fragments: OutputFragments = field(default_factory=dict)
     groups: dict[str, GroupDefinition] = field(default_factory=dict)
     targets: dict[str, TargetDefinition] = field(default_factory=dict)
+    aggregate_variables: Variables = field(default_factory=dict)
+    aggregate_output_fragments: dict[str, AggregateFragments] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -232,10 +247,13 @@ class ProvenanceEntry:
     See README.md "Provenance and `explain`". ``operation`` is the ``op`` string;
     ``operation_index`` is the zero-based index within the fragment.
     ``target`` is ``None`` for per-target rendering (where it would be
-    redundant — there's only one target in play) and set to the contributing
-    target's name for aggregate-scoped rendering, where the same fragment is
-    applied once per target and "fragment X operation 0" alone does not
-    identify a single write (README.md "Aggregate outputs").
+    redundant — there's only one target in play) and for an aggregate
+    output's prologue/epilogue (which runs once, outside the per-target loop,
+    so no single target identifies it either); it is set to the contributing
+    target's name only for aggregate-scoped rendering of a target's own
+    fragments, where the same fragment is applied once per target and
+    "fragment X operation 0" alone does not identify a single write
+    (README.md "Aggregate outputs").
     """
 
     fragment: str

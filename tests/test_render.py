@@ -776,3 +776,850 @@ def test_render_target_outputs_skips_aggregate_scope(
     result = session.render_target_outputs("gb10-01")
     assert "ansible-inventory" not in result.outputs
     assert set(result.outputs) == {"user-data", "meta-data"}
+
+
+# --- aggregate: epilogue (README.md "Aggregate outputs") --------------------
+
+
+def test_aggregate_epilogue_runs_after_every_target(closure_from_tree, stub_runner) -> None:
+    """An epilogue `append` lands after every target's own append, in target
+    order — outside the per-target loop, applied last."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+aggregate:
+  outputs:
+    combined:
+      epilogue: [append-epilogue]
+targets:
+  first:
+    outputs:
+      combined:
+        fragments: [append-target]
+    variables: {}
+  second:
+    outputs:
+      combined:
+        fragments: [append-target]
+    variables: {}
+""",
+            "fragments/append-target.yaml": """
+fragment:
+  version: 1
+  description: appends "<target>"
+operations:
+  - op: append
+    path: /log
+    value: ["{{ target }}"]
+""",
+            "fragments/append-epilogue.yaml": """
+fragment:
+  version: 1
+  description: appends "epilogue"
+operations:
+  - op: append
+    path: /log
+    value: ["epilogue"]
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    rendered = session.render_aggregate("combined")
+    assert rendered is not None
+    assert rendered.document["log"] == ["first", "second", "epilogue"]
+
+
+def test_aggregate_epilogue_assertion_sees_whole_document(closure_from_tree, stub_runner) -> None:
+    """Two targets each add a host; an epilogue assertion requiring both to be
+    present passes, because it runs after every target has contributed — the
+    negative control below shows the same assertion inside a per-target
+    fragment fails, which is the entire point of the feature."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+aggregate:
+  outputs:
+    combined:
+      epilogue: [checks]
+targets:
+  host-a:
+    outputs:
+      combined:
+        fragments: [add-host]
+    variables: {}
+  host-b:
+    outputs:
+      combined:
+        fragments: [add-host]
+    variables: {}
+""",
+            "fragments/add-host.yaml": """
+fragment:
+  version: 1
+  description: adds this target as a host
+operations:
+  - op: set
+    path: "/hosts/{{ target }}"
+    value: true
+""",
+            "fragments/checks.yaml": """
+fragment:
+  version: 1
+  description: both hosts must be present
+operations:
+  - op: assert
+    path: /hosts/host-a
+    exists: true
+  - op: assert
+    path: /hosts/host-b
+    exists: true
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    rendered = session.render_aggregate("combined")
+    assert rendered is not None
+    assert rendered.document == {"hosts": {"host-a": True, "host-b": True}}
+
+
+def test_aggregate_epilogue_assertion_negative_control_partial_document(
+    closure_from_tree, stub_runner
+) -> None:
+    """The same "both hosts present" assertion placed in a PER-TARGET
+    aggregate fragment fails, because it runs during that target's own turn
+    and sees only the partial document built so far — the contrast that
+    justifies the epilogue mechanism."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+targets:
+  host-a:
+    outputs:
+      combined:
+        fragments: [add-host, checks]
+    variables: {}
+  host-b:
+    outputs:
+      combined:
+        fragments: [add-host]
+    variables: {}
+""",
+            "fragments/add-host.yaml": """
+fragment:
+  version: 1
+  description: adds this target as a host
+operations:
+  - op: set
+    path: "/hosts/{{ target }}"
+    value: true
+""",
+            "fragments/checks.yaml": """
+fragment:
+  version: 1
+  description: both hosts must be present -- but this runs during host-a's turn
+operations:
+  - op: assert
+    path: /hosts/host-a
+    exists: true
+  - op: assert
+    path: /hosts/host-b
+    exists: true
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    with pytest.raises(AssertionFailedError):
+        session.render_aggregate("combined")
+
+
+def test_aggregate_epilogue_assertion_failure_raises_assertion_failed(
+    closure_from_tree, stub_runner
+) -> None:
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+aggregate:
+  outputs:
+    combined:
+      epilogue: [checks]
+targets:
+  t1:
+    outputs:
+      combined:
+        fragments: [mark]
+    variables: {}
+""",
+            "fragments/mark.yaml": """
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+            "fragments/checks.yaml": """
+fragment:
+  version: 1
+  description: fails on purpose
+operations:
+  - op: assert
+    path: /value
+    equals: 2
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    with pytest.raises(AssertionFailedError):
+        session.render_aggregate("combined")
+
+
+def test_target_variable_is_undefined_in_aggregate_scope(closure_from_tree, stub_runner) -> None:
+    """`{{ target }}` in an epilogue fragment raises TemplateRenderError,
+    naming the aggregate epilogue scope label."""
+    from yaml_frag.errors import TemplateRenderError
+
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+aggregate:
+  outputs:
+    combined:
+      epilogue: [uses-target]
+targets:
+  t1:
+    outputs:
+      combined:
+        fragments: [mark]
+    variables: {}
+""",
+            "fragments/mark.yaml": """
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+            "fragments/uses-target.yaml": """
+fragment:
+  version: 1
+  description: refers to the undefined `target`
+operations:
+  - op: set
+    path: /bad
+    value: "{{ target }}"
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    with pytest.raises(TemplateRenderError) as exc_info:
+        session.render_aggregate("combined")
+    assert "target" in str(exc_info.value)
+    assert "<aggregate combined epilogue>" in str(exc_info.value)
+
+
+def test_required_target_variable_in_aggregate_scope_fails_closed(
+    closure_from_tree, stub_runner
+) -> None:
+    from yaml_frag.errors import TemplateRenderError
+
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+aggregate:
+  outputs:
+    combined:
+      epilogue: [requires-target]
+targets:
+  t1:
+    outputs:
+      combined:
+        fragments: [mark]
+    variables: {}
+""",
+            "fragments/mark.yaml": """
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+            "fragments/requires-target.yaml": """
+fragment:
+  version: 1
+  description: requires the undefined `target`
+requires:
+  variables:
+    - target
+operations: []
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    with pytest.raises(TemplateRenderError):
+        session.render_aggregate("combined")
+
+
+def test_output_variable_is_set_in_aggregate_scope(closure_from_tree, stub_runner) -> None:
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+aggregate:
+  outputs:
+    combined:
+      epilogue: [uses-output]
+targets:
+  t1:
+    outputs:
+      combined:
+        fragments: [mark]
+    variables: {}
+""",
+            "fragments/mark.yaml": """
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+            "fragments/uses-output.yaml": """
+fragment:
+  version: 1
+  description: refers to the current output's own name
+operations:
+  - op: set
+    path: /output_name
+    value: "{{ output }}"
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    rendered = session.render_aggregate("combined")
+    assert rendered is not None
+    assert rendered.document["output_name"] == "combined"
+
+
+def test_aggregate_scope_variables_layer_defaults_then_aggregate(
+    closure_from_tree, stub_runner
+) -> None:
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+defaults:
+  variables:
+    x: from-defaults
+    y: from-defaults-only
+aggregate:
+  variables:
+    x: from-aggregate
+  outputs:
+    combined:
+      epilogue: [record]
+targets:
+  t1:
+    outputs:
+      combined:
+        fragments: [mark]
+    variables: {}
+""",
+            "fragments/mark.yaml": """
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+            "fragments/record.yaml": """
+fragment:
+  version: 1
+  description: records the layered variables
+operations:
+  - op: set
+    path: /x
+    value: "{{ x }}"
+  - op: set
+    path: /y
+    value: "{{ y }}"
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    rendered = session.render_aggregate("combined")
+    assert rendered is not None
+    assert rendered.document["x"] == "from-aggregate"
+    assert rendered.document["y"] == "from-defaults-only"
+
+
+@pytest.mark.parametrize("reserved_name", ["target", "output"])
+def test_aggregate_scope_rejects_reserved_variable_names(
+    closure_from_tree, stub_runner, reserved_name: str
+) -> None:
+    from yaml_frag.errors import InventoryError
+
+    closure = closure_from_tree(
+        {
+            "targets.yaml": f"""
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+aggregate:
+  variables:
+    {reserved_name}: x
+  outputs:
+    combined:
+      epilogue: [mark]
+targets:
+  t1:
+    outputs:
+      combined:
+        fragments: [mark]
+    variables: {{}}
+""",
+            "fragments/mark.yaml": """
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    with pytest.raises(InventoryError):
+        session.render_aggregate("combined")
+
+
+def test_aggregate_epilogue_skipped_when_no_target_contributes(
+    closure_from_tree, stub_runner
+) -> None:
+    """An epilogue exists but no target contributes: render_aggregate returns
+    None, and the epilogue's assertions (which would fail on an empty
+    document) never run."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+aggregate:
+  outputs:
+    combined:
+      epilogue: [checks]
+targets:
+  t1:
+    variables: {}
+""",
+            "fragments/checks.yaml": """
+fragment:
+  version: 1
+  description: would fail on an empty document
+operations:
+  - op: assert
+    path: /value
+    exists: true
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    assert session.render_aggregate("combined") is None
+
+
+def test_aggregate_scope_variables_not_resolved_without_prologue_or_epilogue(
+    closure_from_tree, stub_runner
+) -> None:
+    """The `has_outer` laziness guard: a `defaults.variables` capture plus an
+    aggregate output with no `aggregate:` block leaves the stub runner's call
+    count at the per-target count -- the aggregate scope's own variable
+    resolution never runs."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+defaults:
+  variables:
+    secret_val:
+      from: capture
+      command: [echo, hi]
+targets:
+  t1:
+    outputs:
+      combined:
+        fragments: [use-secret]
+    variables: {}
+""",
+            "fragments/use-secret.yaml": """
+fragment:
+  version: 1
+  description: consumes the captured variable
+requires:
+  variables:
+    - secret_val
+operations:
+  - op: set
+    path: /value
+    value: "{{ secret_val }}"
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    session.render_aggregate("combined")
+    assert len(stub_runner.calls) == 1
+
+
+def test_aggregate_epilogue_runs_even_with_validate_false(closure_from_tree, stub_runner) -> None:
+    """Epilogue assertions run during composition, not validation, so
+    `validate=False` does not suppress a failing epilogue assertion."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+aggregate:
+  outputs:
+    combined:
+      epilogue: [checks]
+targets:
+  t1:
+    outputs:
+      combined:
+        fragments: [mark]
+    variables: {}
+""",
+            "fragments/mark.yaml": """
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+            "fragments/checks.yaml": """
+fragment:
+  version: 1
+  description: fails on purpose
+operations:
+  - op: assert
+    path: /value
+    equals: 2
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    with pytest.raises(AssertionFailedError):
+        session.render_aggregate("combined", validate=False)
+
+
+# --- aggregate: prologue (README.md "Aggregate outputs") --------------------
+
+
+def test_aggregate_prologue_runs_before_every_target(closure_from_tree, stub_runner) -> None:
+    """A prologue `append` lands before every target's own append, in target
+    order -- outside the per-target loop, applied first."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+aggregate:
+  outputs:
+    combined:
+      prologue: [append-prologue]
+targets:
+  first:
+    outputs:
+      combined:
+        fragments: [append-target]
+    variables: {}
+  second:
+    outputs:
+      combined:
+        fragments: [append-target]
+    variables: {}
+""",
+            "fragments/append-target.yaml": """
+fragment:
+  version: 1
+  description: appends "<target>"
+operations:
+  - op: append
+    path: /log
+    value: ["{{ target }}"]
+""",
+            "fragments/append-prologue.yaml": """
+fragment:
+  version: 1
+  description: appends "prologue"
+operations:
+  - op: append
+    path: /log
+    value: ["prologue"]
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    rendered = session.render_aggregate("combined")
+    assert rendered is not None
+    assert rendered.document["log"] == ["prologue", "first", "second"]
+
+
+def test_aggregate_prologue_epilogue_order_across_contributing_documents(
+    closure_from_tree, stub_runner
+) -> None:
+    """A module and the inventory each contribute a prologue and an epilogue;
+    all four positions land in the expected order: module-prologue,
+    inventory-prologue, targets, module-epilogue, inventory-epilogue."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+imports:
+  a: modules/a
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+aggregate:
+  outputs:
+    combined:
+      prologue: [inv-pre]
+      epilogue: [inv-post]
+targets:
+  t1:
+    outputs:
+      combined:
+        fragments: [mark]
+    variables: {}
+""",
+            "fragments/inv-pre.yaml": """
+fragment:
+  version: 1
+  description: inventory prologue
+operations:
+  - op: append
+    path: /log
+    value: [inv-pre]
+""",
+            "fragments/inv-post.yaml": """
+fragment:
+  version: 1
+  description: inventory epilogue
+operations:
+  - op: append
+    path: /log
+    value: [inv-post]
+""",
+            "fragments/mark.yaml": """
+fragment:
+  version: 1
+  description: target's own contribution
+operations:
+  - op: append
+    path: /log
+    value: ["{{ target }}"]
+""",
+            "modules/a/yaml-frag.yaml": """
+version: 1
+aggregate:
+  outputs:
+    combined:
+      prologue: [mod-pre]
+      epilogue: [mod-post]
+""",
+            "modules/a/fragments/mod-pre.yaml": """
+fragment:
+  version: 1
+  description: module prologue
+operations:
+  - op: append
+    path: /log
+    value: [mod-pre]
+""",
+            "modules/a/fragments/mod-post.yaml": """
+fragment:
+  version: 1
+  description: module epilogue
+operations:
+  - op: append
+    path: /log
+    value: [mod-post]
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    rendered = session.render_aggregate("combined")
+    assert rendered is not None
+    assert rendered.document["log"] == ["mod-pre", "inv-pre", "t1", "mod-post", "inv-post"]
+
+
+def test_aggregate_prologue_provenance_has_no_target(closure_from_tree, stub_runner) -> None:
+    """A prologue provenance entry's `.target` is `None`; a target's own
+    contribution in the same document carries its target name."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+aggregate:
+  outputs:
+    combined:
+      prologue: [pre]
+targets:
+  t1:
+    outputs:
+      combined:
+        fragments: [mark]
+    variables: {}
+""",
+            "fragments/pre.yaml": """
+fragment:
+  version: 1
+  description: prologue
+operations:
+  - op: set
+    path: /pre_value
+    value: 1
+""",
+            "fragments/mark.yaml": """
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    rendered = session.render_aggregate("combined")
+    assert rendered is not None
+    pre_entry = rendered.provenance["/pre_value"][-1]
+    assert pre_entry.target is None
+    target_entry = rendered.provenance["/value"][-1]
+    assert target_entry.target == "t1"
+
+
+def test_prologue_then_target_override_warning_names_only_the_target_it_has(
+    closure_from_tree, stub_runner
+) -> None:
+    """A prologue write later overridden by a target's write produces one
+    override warning whose `new source` carries a `(target ...)`
+    parenthetical and whose `previous source` does not."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "out.yaml"
+aggregate:
+  outputs:
+    combined:
+      prologue: [pre]
+targets:
+  t1:
+    outputs:
+      combined:
+        fragments: [claim]
+    variables: {}
+""",
+            "fragments/pre.yaml": """
+fragment:
+  version: 1
+  description: prologue claims the key first
+operations:
+  - op: set
+    path: /shared
+    value: pre
+""",
+            "fragments/claim.yaml": """
+fragment:
+  version: 1
+  description: the target overrides it
+operations:
+  - op: set
+    path: /shared
+    value: "{{ target }}"
+    overwrite_ok: false
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    rendered = session.render_aggregate("combined")
+    assert rendered is not None
+    assert len(rendered.overrides) == 1
+    warning = rendered.overrides[0]
+    assert "new source" in warning
+    new_source_line = next(line for line in warning.splitlines() if "new source" in line)
+    previous_source_line = next(line for line in warning.splitlines() if "previous source" in line)
+    assert "(target t1)" in new_source_line
+    assert "(target " not in previous_source_line

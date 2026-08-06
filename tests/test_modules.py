@@ -580,6 +580,210 @@ defaults:
     assert "main" in project.default_output_fragments
 
 
+# --- aggregate: prologue/epilogue/variables (README.md "Aggregate outputs") -
+
+
+def test_aggregate_prologue_epilogue_concatenate_in_closure_order(closure_from_tree) -> None:
+    """A module and the inventory each contribute a prologue and an epilogue
+    to the same aggregate output; both tuples concatenate in closure order
+    (dependency before importer), independently of each other."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+imports:
+  a: modules/a
+outputs:
+  combined:
+    scope: aggregate
+    path: out.yaml
+aggregate:
+  outputs:
+    combined:
+      prologue: [inventory-pre]
+      epilogue: [inventory-post]
+targets:
+  t: {}
+""",
+            "modules/a/yaml-frag.yaml": """
+version: 1
+aggregate:
+  outputs:
+    combined:
+      prologue: [module-pre]
+      epilogue: [module-post]
+""",
+        }
+    )
+    project = modules.flatten(closure)
+    spec = project.aggregate_output_fragments["combined"]
+    assert [modules.display_ref(r) for r in spec.prologue] == ["a:module-pre", "inventory-pre"]
+    assert [modules.display_ref(r) for r in spec.epilogue] == ["a:module-post", "inventory-post"]
+
+
+def test_aggregate_variables_layer_module_then_inventory(closure_from_tree) -> None:
+    """`aggregate.variables` layer in closure order, later wins — same shape
+    as `defaults.variables`."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+imports:
+  a: modules/a
+outputs:
+  combined:
+    scope: aggregate
+    path: out.yaml
+aggregate:
+  variables:
+    x: inventory
+targets:
+  t: {}
+""",
+            "modules/a/yaml-frag.yaml": """
+version: 1
+aggregate:
+  variables:
+    x: module
+    y: module-only
+""",
+        }
+    )
+    project = modules.flatten(closure)
+    assert project.aggregate_variables == {"x": "inventory", "y": "module-only"}
+
+
+def test_module_may_declare_aggregate_block(closure_from_tree) -> None:
+    """A module-only `aggregate:` block flattens even with no inventory
+    `aggregate:` block present."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+imports:
+  a: modules/a
+outputs:
+  combined:
+    scope: aggregate
+    path: out.yaml
+targets:
+  t: {}
+""",
+            "modules/a/yaml-frag.yaml": """
+version: 1
+aggregate:
+  outputs:
+    combined:
+      epilogue: [module-post]
+""",
+        }
+    )
+    project = modules.flatten(closure)
+    assert [
+        modules.display_ref(r) for r in project.aggregate_output_fragments["combined"].epilogue
+    ] == ["a:module-post"]
+
+
+def test_aggregate_refs_resolve_against_declaring_document(closure_from_tree) -> None:
+    """A bare ref in a module's `aggregate.outputs.<name>.epilogue` resolves
+    against that module's own tree and displays qualified."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+imports:
+  a: modules/a
+outputs:
+  combined:
+    scope: aggregate
+    path: out.yaml
+targets:
+  t: {}
+""",
+            "modules/a/yaml-frag.yaml": """
+version: 1
+aggregate:
+  outputs:
+    combined:
+      epilogue: [checks]
+""",
+        }
+    )
+    project = modules.flatten(closure)
+    assert [
+        modules.display_ref(r) for r in project.aggregate_output_fragments["combined"].epilogue
+    ] == ["a:checks"]
+
+
+def test_aggregate_attaching_to_undefined_output_rejected(closure_from_tree) -> None:
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  main:
+    path: out
+aggregate:
+  outputs:
+    nope:
+      epilogue: [x]
+targets:
+  t: {}
+""",
+        }
+    )
+    with pytest.raises(ModuleError, match="undefined output"):
+        modules.flatten(closure)
+
+
+@pytest.mark.parametrize(
+    "aggregate_block",
+    [
+        "aggregate:\n  outputs:\n    main:\n      prologue: [x]\n",
+        "aggregate:\n  outputs:\n    main:\n      epilogue: [x]\n",
+        "aggregate:\n  outputs:\n    main:\n      prologue: []\n      epilogue: []\n",
+    ],
+)
+def test_aggregate_on_target_scoped_output_rejected(closure_from_tree, aggregate_block: str) -> None:
+    """`aggregate.outputs.<name>` naming a `scope: target` output is rejected
+    — presence of the key is the claim, even with empty lists."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": f"""
+version: 1
+outputs:
+  main:
+    path: "out-{{target}}"
+{aggregate_block}targets:
+  t: {{}}
+""",
+            "fragments/x.yaml": (
+                "fragment:\n  version: 1\n  description: x\noperations: []\n"
+            ),
+        }
+    )
+    with pytest.raises(ModuleError, match="scope 'target'"):
+        modules.flatten(closure)
+
+
+def test_closure_without_aggregate_block_has_empty_aggregate_scope(closure_from_tree) -> None:
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  main:
+    path: "out-{target}"
+targets:
+  t: {}
+""",
+        }
+    )
+    project = modules.flatten(closure)
+    assert project.aggregate_variables == {}
+    assert project.aggregate_output_fragments == {}
+
+
 # --- Reference resolution ----------------------------------------------------
 
 
@@ -816,3 +1020,7 @@ def test_real_example_flattens(example_closure) -> None:
     assert set(project.outputs) == {"user-data", "meta-data", "ansible-inventory"}
     assert project.outputs["ansible-inventory"].scope == "aggregate"
     assert project.default_output == "user-data"
+    assert [
+        modules.display_ref(r)
+        for r in project.aggregate_output_fragments["ansible-inventory"].epilogue
+    ] == ["ansible:ansible/checks"]

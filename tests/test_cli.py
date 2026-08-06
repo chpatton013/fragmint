@@ -976,3 +976,303 @@ def test_fragments_dir_unknown_module_rejected(repo_root: Path, tmp_path: Path) 
         ]
     )
     assert exit_code == ExitCode.MODULE_ERROR
+
+
+# --- aggregate: epilogue (README.md "Aggregate outputs") --------------------
+
+
+def _write_aggregate_epilogue_tree(tmp_path: Path, *, epilogue_asserts_equals: int) -> Path:
+    """A synthetic closure with one aggregate output, one contributing
+    target, and an epilogue that asserts `/value == epilogue_asserts_equals`
+    (so the caller can choose whether the epilogue assertion passes)."""
+    (tmp_path / "fragments").mkdir()
+    (tmp_path / "fragments" / "mark.yaml").write_text(
+        """
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /value
+    value: 1
+"""
+    )
+    (tmp_path / "fragments" / "checks.yaml").write_text(
+        f"""
+fragment:
+  version: 1
+  description: checks
+operations:
+  - op: assert
+    path: /value
+    equals: {epilogue_asserts_equals}
+"""
+    )
+    (tmp_path / "targets.yaml").write_text(
+        f"""
+version: 1
+outputs:
+  main:
+    path: "{tmp_path}/rendered/{{target}}/output"
+  combined:
+    scope: aggregate
+    path: "{tmp_path}/rendered/combined.yaml"
+aggregate:
+  outputs:
+    combined:
+      epilogue: [checks]
+targets:
+  t1:
+    outputs:
+      main:
+        fragments: [mark]
+      combined:
+        fragments: [mark]
+    variables: {{}}
+"""
+    )
+    return tmp_path / "targets.yaml"
+
+
+def test_render_all_only_aggregate_runs_epilogue_assertions(tmp_path: Path) -> None:
+    """`render-all --only <aggregate>` with a passing epilogue assertion
+    succeeds and writes the composed document."""
+    inventory = _write_aggregate_epilogue_tree(tmp_path, epilogue_asserts_equals=1)
+    exit_code = main(
+        ["render-all", "--inventory", str(inventory), "--only", "combined"]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    assert (tmp_path / "rendered" / "combined.yaml").is_file()
+
+
+def test_render_all_epilogue_assertion_failure_exit_code(tmp_path: Path) -> None:
+    """A failing epilogue assertion surfaces as exit code 6, and no aggregate
+    file is left on disk."""
+    inventory = _write_aggregate_epilogue_tree(tmp_path, epilogue_asserts_equals=2)
+    exit_code = main(
+        ["render-all", "--inventory", str(inventory), "--only", "combined"]
+    )
+    assert exit_code == ExitCode.RENDERED_VALIDATION
+    assert not (tmp_path / "rendered" / "combined.yaml").exists()
+
+
+def test_render_all_epilogue_failure_leaves_per_target_files_written(tmp_path: Path) -> None:
+    """When the epilogue assertion fails, per-target outputs already written
+    during the run stay on disk (same as an aggregate schema failure today)."""
+    inventory = _write_aggregate_epilogue_tree(tmp_path, epilogue_asserts_equals=2)
+    exit_code = main(["render-all", "--inventory", str(inventory)])
+    assert exit_code == ExitCode.RENDERED_VALIDATION
+    assert (tmp_path / "rendered" / "t1" / "output").is_file()
+    assert not (tmp_path / "rendered" / "combined.yaml").exists()
+
+
+def test_aggregate_block_on_target_scoped_output_exit_code(tmp_path: Path) -> None:
+    (tmp_path / "fragments").mkdir()
+    (tmp_path / "fragments" / "x.yaml").write_text(
+        "fragment:\n  version: 1\n  description: x\noperations: []\n"
+    )
+    (tmp_path / "targets.yaml").write_text(
+        f"""
+version: 1
+outputs:
+  main:
+    path: "{tmp_path}/rendered/{{target}}/output"
+aggregate:
+  outputs:
+    main:
+      epilogue: [x]
+targets:
+  t1: {{}}
+"""
+    )
+    exit_code = main(["render-all", "--inventory", str(tmp_path / "targets.yaml")])
+    assert exit_code == ExitCode.MODULE_ERROR
+
+
+def test_aggregate_block_unknown_output_exit_code(tmp_path: Path) -> None:
+    (tmp_path / "fragments").mkdir()
+    (tmp_path / "fragments" / "x.yaml").write_text(
+        "fragment:\n  version: 1\n  description: x\noperations: []\n"
+    )
+    (tmp_path / "targets.yaml").write_text(
+        f"""
+version: 1
+outputs:
+  main:
+    path: "{tmp_path}/rendered/{{target}}/output"
+aggregate:
+  outputs:
+    no-such-output:
+      epilogue: [x]
+targets:
+  t1: {{}}
+"""
+    )
+    exit_code = main(["render-all", "--inventory", str(tmp_path / "targets.yaml")])
+    assert exit_code == ExitCode.MODULE_ERROR
+
+
+def test_target_variable_in_epilogue_exit_code(tmp_path: Path) -> None:
+    """`{{ target }}` in an epilogue fragment fails closed with exit code 1."""
+    (tmp_path / "fragments").mkdir()
+    (tmp_path / "fragments" / "mark.yaml").write_text(
+        """
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /value
+    value: 1
+"""
+    )
+    (tmp_path / "fragments" / "uses-target.yaml").write_text(
+        """
+fragment:
+  version: 1
+  description: refers to the undefined `target`
+operations:
+  - op: set
+    path: /bad
+    value: "{{ target }}"
+"""
+    )
+    (tmp_path / "targets.yaml").write_text(
+        f"""
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "{tmp_path}/rendered/combined.yaml"
+aggregate:
+  outputs:
+    combined:
+      epilogue: [uses-target]
+targets:
+  t1:
+    outputs:
+      combined:
+        fragments: [mark]
+    variables: {{}}
+"""
+    )
+    exit_code = main(
+        ["render-all", "--inventory", str(tmp_path / "targets.yaml"), "--only", "combined"]
+    )
+    assert exit_code == ExitCode.RENDER_FAILURE
+
+
+def test_aggregate_reserved_variable_exit_code(tmp_path: Path) -> None:
+    (tmp_path / "fragments").mkdir()
+    (tmp_path / "fragments" / "mark.yaml").write_text(
+        """
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /value
+    value: 1
+"""
+    )
+    (tmp_path / "targets.yaml").write_text(
+        f"""
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "{tmp_path}/rendered/combined.yaml"
+aggregate:
+  variables:
+    target: x
+  outputs:
+    combined:
+      epilogue: [mark]
+targets:
+  t1:
+    outputs:
+      combined:
+        fragments: [mark]
+    variables: {{}}
+"""
+    )
+    exit_code = main(
+        ["render-all", "--inventory", str(tmp_path / "targets.yaml"), "--only", "combined"]
+    )
+    assert exit_code == ExitCode.INVENTORY_VALIDATION
+
+
+def test_render_all_only_target_scoped_output_does_not_run_epilogue(tmp_path: Path) -> None:
+    """`render-all --only <target-scoped>` with a deliberately failing
+    epilogue elsewhere in the closure still exits 0 -- `_select_run_scope`
+    scopes the whole run away from the aggregate output entirely."""
+    inventory = _write_aggregate_epilogue_tree(tmp_path, epilogue_asserts_equals=2)
+    exit_code = main(["render-all", "--inventory", str(inventory), "--only", "main"])
+    assert exit_code == ExitCode.SUCCESS
+    assert (tmp_path / "rendered" / "t1" / "output").is_file()
+    assert not (tmp_path / "rendered" / "combined.yaml").exists()
+
+
+def test_explain_aggregate_epilogue_line_has_no_target_parenthetical(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A prologue write's `source:` line lacks a `(target ...)` parenthetical
+    (an epilogue of pure assertions records nothing to show), while a host
+    line contributed by a target carries one."""
+    (tmp_path / "fragments").mkdir()
+    (tmp_path / "fragments" / "pre.yaml").write_text(
+        """
+fragment:
+  version: 1
+  description: prologue
+operations:
+  - op: set
+    path: /pre_value
+    value: 1
+"""
+    )
+    (tmp_path / "fragments" / "mark.yaml").write_text(
+        """
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /value
+    value: 1
+"""
+    )
+    (tmp_path / "targets.yaml").write_text(
+        f"""
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: "{tmp_path}/rendered/combined.yaml"
+aggregate:
+  outputs:
+    combined:
+      prologue: [pre]
+targets:
+  t1:
+    outputs:
+      combined:
+        fragments: [mark]
+    variables: {{}}
+"""
+    )
+    exit_code = main(
+        [
+            "explain",
+            "--inventory",
+            str(tmp_path / "targets.yaml"),
+            "--only",
+            "combined",
+        ]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    out = capsys.readouterr().out
+    pre_line = next(line for line in out.splitlines() if "source:" in line and "pre" in line)
+    host_line = next(line for line in out.splitlines() if "source:" in line and "mark" in line)
+    assert "(target " not in pre_line
+    assert "(target t1)" in host_line

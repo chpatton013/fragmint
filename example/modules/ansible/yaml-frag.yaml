@@ -20,6 +20,15 @@ defaults:
       fragments:
         - ansible/host
 
+aggregate:
+  outputs:
+    ansible-inventory:
+      # Runs once, after every contributing target, so its assertions see the
+      # finished document (README.md "Aggregate outputs") — the schema above
+      # checks shape; this checks a fact the schema cannot state.
+      epilogue:
+        - ansible/checks
+
 groups:
   gb10:
     variables:

@@ -39,6 +39,14 @@
     "validators": {
       "type": "object",
       "additionalProperties": { "$ref": "#/$defs/validator" }
+    },
+    "aggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "variables": { "$ref": "#/$defs/variables" },
+        "outputs": { "$ref": "#/$defs/aggregateOutputFragments" }
+      }
     }
   },
   "$defs": {
@@ -106,6 +114,18 @@
           "type": "array",
           "items": { "type": "string" },
           "minItems": 1
+        }
+      }
+    },
+    "aggregateOutputFragments": {
+      "type": "object",
+      "description": "Output name -> this document's prologue/epilogue contribution to that aggregate output. Fragments run outside the per-target loop. The output must exist in the closure and must have `scope: aggregate`; both are enforced in modules.py.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "prologue": { "$ref": "#/$defs/fragmentList" },
+          "epilogue": { "$ref": "#/$defs/fragmentList" }
         }
       }
     }

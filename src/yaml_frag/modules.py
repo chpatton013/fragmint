@@ -45,10 +45,16 @@ Flattening
 :class:`~yaml_frag.models.Project`: outputs and validators unioned by name
 (each defined exactly once across the closure), ``defaults`` variables and
 fragments layered in closure order, same-named ``groups`` merged across
-documents, and the inventory's ``targets`` carried through with their
-fragment references resolved. This is kept as a separate step from graph
-traversal specifically so composition/merge rules can be unit-tested against
-a synthetic :class:`Closure` without loading real files (see
+documents, the inventory's ``targets`` carried through with their fragment
+references resolved, and every document's ``aggregate:`` block flattened the
+same way ``defaults`` is — ``aggregate.variables`` layered in closure order,
+each aggregate output's ``prologue``/``epilogue`` extended independently, also
+in closure order (:func:`_flatten_aggregate`; README.md "Aggregate outputs").
+An ``aggregate.outputs`` entry naming an output undefined anywhere in the
+closure, or one whose ``scope`` is ``"target"``, fails closed naming the
+declaring document. This is kept as a separate step from graph traversal
+specifically so composition/merge rules can be unit-tested against a
+synthetic :class:`Closure` without loading real files (see
 ``tests/test_modules.py``).
 """
 
@@ -63,6 +69,7 @@ import jsonschema
 
 from .errors import ModuleError
 from .models import (
+    AggregateFragments,
     GroupDefinition,
     OutputFragments,
     OutputSpec,
@@ -197,6 +204,15 @@ class _RawTarget:
 
 
 @dataclass(frozen=True)
+class _RawAggregate:
+    """One document's own ``aggregate.outputs.<name>`` entry, prior to
+    closure-wide resolution. See README.md "Aggregate outputs"."""
+
+    prologue: tuple[str, ...] = ()
+    epilogue: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Document:
     """A loaded module or the inventory (the root), before closure-wide
     reference resolution.
@@ -223,6 +239,8 @@ class Document:
     default_output_fragments: dict[str, tuple[str, ...]]
     groups: dict[str, _RawGroup]
     targets: dict[str, _RawTarget]
+    aggregate_variables: Variables
+    aggregate_output_fragments: dict[str, _RawAggregate]
 
     @property
     def is_root(self) -> bool:
@@ -262,6 +280,22 @@ def _parse_output_fragments(raw: dict[str, Any] | None) -> dict[str, tuple[str, 
         output_raw = output_raw or {}
         result[output_name] = tuple(output_raw.get("fragments", []) or [])
     return result
+
+
+def _parse_aggregate(raw: dict[str, Any] | None) -> tuple[Variables, dict[str, _RawAggregate]]:
+    """Parse a document's own ``aggregate:`` block into its variables and its
+    per-output prologue/epilogue contribution. See README.md "Aggregate
+    outputs"."""
+    raw = raw or {}
+    variables: Variables = dict(raw.get("variables", {}) or {})
+    output_fragments: dict[str, _RawAggregate] = {}
+    for output_name, output_raw in (raw.get("outputs", {}) or {}).items():
+        output_raw = output_raw or {}
+        output_fragments[output_name] = _RawAggregate(
+            prologue=tuple(output_raw.get("prologue", []) or []),
+            epilogue=tuple(output_raw.get("epilogue", []) or []),
+        )
+    return variables, output_fragments
 
 
 def _parse_output(doc_dir: Path, name: str, raw: dict[str, Any]) -> _RawOutput:
@@ -364,6 +398,8 @@ def _load_document(doc_path: Path, *, name: str | None) -> Document:
     default_variables: Variables = dict(defaults_raw.get("variables", {}) or {})
     default_output_fragments = _parse_output_fragments(defaults_raw.get("outputs"))
 
+    aggregate_variables, aggregate_output_fragments = _parse_aggregate(doc.get("aggregate"))
+
     groups: dict[str, _RawGroup] = {}
     for gname, graw in (doc.get("groups", {}) or {}).items():
         graw = graw or {}
@@ -405,6 +441,8 @@ def _load_document(doc_path: Path, *, name: str | None) -> Document:
         default_output_fragments=default_output_fragments,
         groups=groups,
         targets=targets,
+        aggregate_variables=aggregate_variables,
+        aggregate_output_fragments=aggregate_output_fragments,
     )
 
 
@@ -722,6 +760,55 @@ def _flatten_targets(closure: Closure) -> dict[str, TargetDefinition]:
     }
 
 
+def _flatten_aggregate(
+    closure: Closure, outputs: dict[str, OutputSpec]
+) -> tuple[Variables, dict[str, AggregateFragments]]:
+    """Flatten every document's ``aggregate:`` block across the closure.
+
+    Mirrors :func:`_flatten_defaults`: ``aggregate.variables`` layers in
+    closure order (later wins), and each output's ``prologue``/``epilogue``
+    extends independently, also in closure order. Checked here, inside the
+    per-document loop, so a fail-closed error can name the declaring document
+    (README.md "Aggregate outputs"): naming an output undefined anywhere in
+    the closure, or one whose ``scope`` is ``"target"``, since prologue/
+    epilogue exist only for ``scope: aggregate`` outputs.
+    """
+    variables: Variables = {}
+    prologue: dict[str, list[Ref]] = {}
+    epilogue: dict[str, list[Ref]] = {}
+    for doc in closure.documents:
+        variables.update(doc.aggregate_variables)
+        for output_name, raw_aggregate in doc.aggregate_output_fragments.items():
+            if output_name not in outputs:
+                raise ModuleError(
+                    f"document {doc.path}: `aggregate.outputs` names undefined "
+                    f"output {output_name!r}"
+                )
+            output = outputs[output_name]
+            if output.scope != "aggregate":
+                raise ModuleError(
+                    f"document {doc.path}: `aggregate.outputs.{output_name}` declares "
+                    f"a prologue/epilogue, but output {output_name!r} has scope "
+                    f"{output.scope!r}; prologue/epilogue exist only for "
+                    f"`scope: aggregate` outputs"
+                )
+            prologue.setdefault(output_name, []).extend(
+                resolve_ref(ref, declaring=doc, closure=closure) for ref in raw_aggregate.prologue
+            )
+            epilogue.setdefault(output_name, []).extend(
+                resolve_ref(ref, declaring=doc, closure=closure) for ref in raw_aggregate.epilogue
+            )
+
+    output_names = set(prologue) | set(epilogue)
+    output_fragments = {
+        name: AggregateFragments(
+            prologue=tuple(prologue.get(name, ())), epilogue=tuple(epilogue.get(name, ()))
+        )
+        for name in output_names
+    }
+    return variables, output_fragments
+
+
 def flatten(closure: Closure) -> Project:
     """Flatten a loaded :class:`Closure` into one closure-wide
     :class:`~yaml_frag.models.Project`.
@@ -736,6 +823,7 @@ def flatten(closure: Closure) -> Project:
     default_variables, default_output_fragments = _flatten_defaults(closure)
     groups = _flatten_groups(closure)
     targets = _flatten_targets(closure)
+    aggregate_variables, aggregate_output_fragments = _flatten_aggregate(closure, outputs)
 
     for tname, target in targets.items():
         for group_name in target.groups:
@@ -762,6 +850,8 @@ def flatten(closure: Closure) -> Project:
         default_output_fragments=default_output_fragments,
         groups=groups,
         targets=targets,
+        aggregate_variables=aggregate_variables,
+        aggregate_output_fragments=aggregate_output_fragments,
     )
 
 
