@@ -9,6 +9,8 @@ before committing (see tests/fixtures/README.md).
 
 from __future__ import annotations
 
+import json
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -19,10 +21,11 @@ from fragmint.errors import (
     CaptureError,
     ModuleError,
     SecretNotFoundError,
+    SerializationError,
     TemplateRenderError,
     ValidationError,
 )
-from fragmint.models import OutputSpec
+from fragmint.models import OutputSpec, RenderedOutput
 
 SNAPSHOT_TARGETS = ["generic-vm-01", "gb10-01", "gb10-02"]
 
@@ -453,8 +456,6 @@ def test_redact_variables_secret_source_shown_regardless_of_name() -> None:
 
 
 def test_compose_output_ends_with_single_trailing_newline() -> None:
-    from fragmint.models import RenderedOutput
-
     result = RenderedOutput(name="main", document={"a": 1}, provenance={}, overrides=())
     output = OutputSpec(path="rendered/{target}", template=None)
     text = render_mod.compose_output(result, output)
@@ -487,6 +488,198 @@ def test_write_output_never_leaves_partial_file_on_failure(tmp_path: Path, monke
     assert target_path.read_text() == "original\n"
     leftovers = [p for p in tmp_path.iterdir() if p.name != "user-data"]
     assert leftovers == []
+
+
+# --- Multi-format serialization (README.md "Serialization") ----------------
+
+
+def test_toml_and_json_fragments_compose_identically_to_yaml(closure_from_tree, stub_runner) -> None:
+    """A fragment's input format never affects the composed document — see
+    README.md "Fragment format vs. output format independence"."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  main:
+    path: out
+defaults:
+  outputs:
+    main:
+      fragments: [from-yaml, from-toml, from-json]
+targets:
+  t: {}
+""",
+            "fragments/from-yaml.yaml": (
+                "fragment:\n  version: 1\n  description: x\n"
+                "operations:\n  - op: set\n    path: /a\n    value: 1\n"
+            ),
+            "fragments/from-toml.toml": (
+                '[fragment]\nversion = 1\ndescription = "x"\n\n'
+                '[[operations]]\nop = "set"\npath = "/b"\nvalue = 2\n'
+            ),
+            "fragments/from-json.json": (
+                '{"fragment": {"version": 1, "description": "x"}, '
+                '"operations": [{"op": "set", "path": "/c", "value": 3}]}'
+            ),
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    result = session.render_target_outputs("t")
+    assert result.outputs["main"].document == {"a": 1, "b": 2, "c": 3}
+
+
+def test_output_rendered_to_json_holds_the_same_document() -> None:
+    result = RenderedOutput(name="main", document={"a": 1, "b": [1, 2]}, provenance={}, overrides=())
+    output = OutputSpec(path="rendered/{target}.json", template=None, format="json")
+    text = render_mod.compose_output(result, output)
+    assert json.loads(text) == {"a": 1, "b": [1, 2]}
+
+
+def test_output_rendered_to_toml_round_trips_to_the_same_document() -> None:
+    result = RenderedOutput(name="main", document={"a": 1, "b": [1, 2]}, provenance={}, overrides=())
+    output = OutputSpec(path="rendered/{target}.toml", template=None, format="toml")
+    text = render_mod.compose_output(result, output)
+    assert tomllib.loads(text) == {"a": 1, "b": [1, 2]}
+
+
+def test_null_from_a_yaml_fragment_fails_closed_for_a_toml_output(closure_from_tree) -> None:
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  main:
+    path: out.toml
+defaults:
+  outputs:
+    main:
+      fragments: [nullify]
+targets:
+  t: {}
+""",
+            "fragments/nullify.yaml": (
+                "fragment:\n  version: 1\n  description: x\n"
+                "operations:\n  - op: set\n    path: /a\n    value: null\n"
+            ),
+        }
+    )
+    session = render_mod.RenderSession(closure)
+    result = session.render_target_outputs("t")
+    output = session.project.outputs["main"]
+    with pytest.raises(SerializationError) as excinfo:
+        render_mod.compose_output(result.outputs["main"], output)
+    assert "/a" in str(excinfo.value)
+
+
+def test_non_finite_float_fails_closed_for_a_json_output(closure_from_tree) -> None:
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  main:
+    path: out.json
+defaults:
+  outputs:
+    main:
+      fragments: [infinite]
+targets:
+  t: {}
+""",
+            "fragments/infinite.yaml": (
+                "fragment:\n  version: 1\n  description: x\n"
+                "operations:\n  - op: set\n    path: /a\n    value: .inf\n"
+            ),
+        }
+    )
+    session = render_mod.RenderSession(closure)
+    result = session.render_target_outputs("t")
+    output = session.project.outputs["main"]
+    with pytest.raises(SerializationError) as excinfo:
+        render_mod.compose_output(result.outputs["main"], output)
+    assert "/a" in str(excinfo.value)
+
+
+def test_serialization_error_names_the_output_and_pointer() -> None:
+    result = RenderedOutput(name="agent-config", document={"a": None}, provenance={}, overrides=())
+    output = OutputSpec(path="rendered/{target}.toml", template=None, format="toml")
+    with pytest.raises(SerializationError) as excinfo:
+        render_mod.compose_output(result, output)
+    message = str(excinfo.value)
+    assert "agent-config" in message
+    assert "/a" in message
+
+
+@pytest.mark.parametrize("fmt", ["yaml", "toml", "json"])
+def test_compose_output_ends_with_single_trailing_newline_for_every_format(fmt: str) -> None:
+    result = RenderedOutput(name="main", document={"a": 1}, provenance={}, overrides=())
+    output = OutputSpec(path=f"rendered/{{target}}.{fmt}", template=None, format=fmt)  # type: ignore[arg-type]
+    text = render_mod.compose_output(result, output)
+    assert text.endswith("\n")
+    assert not text.endswith("\n\n")
+
+
+def test_aggregate_output_serializes_in_its_configured_format(closure_from_tree, stub_runner) -> None:
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: out.json
+defaults:
+  outputs:
+    combined:
+      fragments: [seed]
+targets:
+  t: {}
+""",
+            "fragments/seed.yaml": (
+                "fragment:\n  version: 1\n  description: x\n"
+                "operations:\n  - op: set\n    path: /a\n    value: 1\n"
+            ),
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    rendered = session.render_aggregate("combined")
+    assert rendered is not None
+    text = render_mod.compose_output(rendered, session.project.outputs["combined"])
+    assert json.loads(text) == {"a": 1}
+
+
+def test_remove_leaves_no_null_and_stays_toml_serializable(closure_from_tree) -> None:
+    """pointer.delete truly removes the key rather than leaving an explicit
+    null behind, so a `remove` never makes a TOML output impossible on its
+    own (README.md "Serialization" — TOML has no null)."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  main:
+    path: out.toml
+defaults:
+  outputs:
+    main:
+      fragments: [set-then-remove]
+targets:
+  t: {}
+""",
+            "fragments/set-then-remove.yaml": (
+                "fragment:\n  version: 1\n  description: x\n"
+                "operations:\n"
+                "  - op: set\n    path: /a\n    value: 1\n"
+                "  - op: remove\n    path: /a\n"
+            ),
+        }
+    )
+    session = render_mod.RenderSession(closure)
+    result = session.render_target_outputs("t")
+    output = session.project.outputs["main"]
+    text = render_mod.compose_output(result.outputs["main"], output)
+    assert tomllib.loads(text) == {}
 
 
 # --- Aggregate outputs (README.md "Aggregate outputs") ----------------------

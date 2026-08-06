@@ -102,7 +102,11 @@
           "items": { "type": "string", "minLength": 1 }
         },
         "default": { "type": "boolean" },
-        "scope": { "enum": ["target", "aggregate"] }
+        "scope": { "enum": ["target", "aggregate"] },
+        "format": {
+          "enum": ["yaml", "toml", "json"],
+          "description": "This output's serialization format. An explicit value here wins; otherwise it is inferred from the suffix of `path` (before `{target}` substitution); otherwise it defaults to `yaml`."
+        }
       }
     },
     "validator": {

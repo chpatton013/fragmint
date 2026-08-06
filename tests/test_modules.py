@@ -1088,6 +1088,80 @@ def test_fragment_candidate_paths_are_containment_checked(closure_from_tree) -> 
         modules.fragment_path(ref, closure)
 
 
+# --- Output serialization format ---------------------------------------------
+
+
+def test_output_format_defaults_to_yaml_for_extensionless_path(closure_from_tree) -> None:
+    closure = closure_from_tree(
+        {
+            "targets.yaml": "version: 1\noutputs:\n  main:\n    path: out\ntargets:\n  t: {}\n",
+        }
+    )
+    project = modules.flatten(closure)
+    assert project.outputs["main"].format == "yaml"
+
+
+def test_output_format_inferred_from_path_suffix(closure_from_tree) -> None:
+    closure = closure_from_tree(
+        {
+            "targets.yaml": "version: 1\noutputs:\n  main:\n    path: out.json\ntargets:\n  t: {}\n",
+        }
+    )
+    project = modules.flatten(closure)
+    assert project.outputs["main"].format == "json"
+
+
+def test_output_format_accepts_yml_suffix(closure_from_tree) -> None:
+    closure = closure_from_tree(
+        {
+            "targets.yaml": "version: 1\noutputs:\n  main:\n    path: out.yml\ntargets:\n  t: {}\n",
+        }
+    )
+    project = modules.flatten(closure)
+    assert project.outputs["main"].format == "yaml"
+
+
+def test_output_format_explicit_key_wins_over_path_suffix(closure_from_tree) -> None:
+    closure = closure_from_tree(
+        {
+            "targets.yaml": (
+                "version: 1\noutputs:\n  main:\n    path: out.json\n    format: toml\n"
+                "targets:\n  t: {}\n"
+            ),
+        }
+    )
+    project = modules.flatten(closure)
+    assert project.outputs["main"].format == "toml"
+
+
+def test_output_format_unknown_value_is_a_module_error(closure_from_tree) -> None:
+    with pytest.raises(ModuleError):
+        closure_from_tree(
+            {
+                "targets.yaml": (
+                    "version: 1\noutputs:\n  main:\n    path: out\n    format: xml\n"
+                    "targets:\n  t: {}\n"
+                ),
+            }
+        )
+
+
+def test_output_format_inferred_from_the_unsubstituted_path_pattern(closure_from_tree) -> None:
+    """A target legitimately named `web.json` must not make `format:`
+    inference target-dependent — inference reads the pattern before `{target}`
+    substitution, so an output has exactly one format for every target."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": (
+                "version: 1\noutputs:\n  main:\n    path: 'rendered/{target}'\n"
+                "targets:\n  web.json: {}\n"
+            ),
+        }
+    )
+    project = modules.flatten(closure)
+    assert project.outputs["main"].format == "yaml"
+
+
 # --- resolve_inventory_path (README.md "The module model") ------------------
 
 

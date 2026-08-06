@@ -72,6 +72,7 @@ from .errors import AmbiguousFragmentError, ModuleError, UnknownFragmentError
 from .formats import load_data_file
 from .models import (
     AggregateFragments,
+    Format,
     GroupDefinition,
     OutputFragments,
     OutputSpec,
@@ -190,6 +191,7 @@ class _RawOutput:
     validators: tuple[str, ...]
     default: bool
     scope: Literal["target", "aggregate"]
+    format: Format
 
 
 @dataclass(frozen=True)
@@ -300,6 +302,25 @@ def _parse_aggregate(raw: dict[str, Any] | None) -> tuple[Variables, dict[str, _
     return variables, output_fragments
 
 
+def _parse_output_format(name: str, path: str, raw: dict[str, Any]) -> Format:
+    """Resolve one output's serialization format: an explicit ``format:``
+    wins; otherwise infer from the suffix of ``path`` *as written*, before
+    ``{target}`` substitution (so an output has exactly one format,
+    independent of which target renders it — see README.md "Outputs and
+    validators across the closure"); otherwise :data:`formats.DEFAULT_FORMAT`.
+    An unknown ``format:`` value fails closed naming the output and the
+    accepted values."""
+    format_raw = raw.get("format")
+    if format_raw is not None:
+        if format_raw not in ("yaml", "toml", "json"):
+            raise ModuleError(
+                f"output {name!r}: format must be one of 'yaml', 'toml', 'json', "
+                f"got {format_raw!r}"
+            )
+        return cast(Format, format_raw)
+    return formats.format_for_path(path) or formats.DEFAULT_FORMAT
+
+
 def _parse_output(doc_dir: Path, name: str, raw: dict[str, Any]) -> _RawOutput:
     path = cast(str, raw["path"])
     scope_raw = raw.get("scope", "target")
@@ -307,6 +328,7 @@ def _parse_output(doc_dir: Path, name: str, raw: dict[str, Any]) -> _RawOutput:
         raise ModuleError(f"output {name!r}: scope must be 'target' or 'aggregate', got {scope_raw!r}")
     scope = cast(Literal["target", "aggregate"], scope_raw)
     default_flag = bool(raw.get("default", False))
+    fmt = _parse_output_format(name, path, raw)
 
     if scope == "aggregate":
         if "{target}" in path:
@@ -327,6 +349,7 @@ def _parse_output(doc_dir: Path, name: str, raw: dict[str, Any]) -> _RawOutput:
         validators=tuple(raw.get("validators", []) or []),
         default=default_flag,
         scope=scope,
+        format=fmt,
     )
 
 
@@ -710,6 +733,7 @@ def _flatten_outputs(closure: Closure) -> tuple[dict[str, OutputSpec], str | Non
                 validators=raw_output.validators,
                 default=raw_output.default,
                 scope=raw_output.scope,
+                format=raw_output.format,
             )
 
     default_candidates = [name for name, spec in outputs.items() if spec.default]

@@ -11,7 +11,10 @@ don't require captures, or they monkeypatch
 
 from __future__ import annotations
 
+import json
 import shutil
+import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -497,6 +500,271 @@ targets:
         ["render", "t", "--inventory", str(inventory_path), "--validator", "no-such-validator"]
     )
     assert exit_code == ExitCode.MODULE_ERROR
+
+
+# --- Multi-format inputs/outputs (README.md "Serialization") ----------------
+
+
+def _write_fragment(tmp_path: Path, path: str, value: int) -> None:
+    (tmp_path / path).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / path).write_text(
+        f"""
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /value
+    value: {value}
+"""
+    )
+
+
+def test_render_writes_a_json_output_to_its_configured_path(tmp_path: Path) -> None:
+    (tmp_path / "fragments").mkdir()
+    _write_fragment(tmp_path, "fragments/mark.yaml", 1)
+    (tmp_path / "targets.yaml").write_text(
+        f"""
+version: 1
+outputs:
+  main:
+    path: "{tmp_path}/rendered/{{target}}.json"
+targets:
+  t:
+    outputs:
+      main:
+        fragments: [mark]
+"""
+    )
+    exit_code = main(["render", "t", "--inventory", str(tmp_path / "targets.yaml")])
+    assert exit_code == ExitCode.SUCCESS
+    written = tmp_path / "rendered" / "t.json"
+    assert written.is_file()
+    assert json.loads(written.read_text()) == {"value": 1}
+
+
+def test_render_stdout_prints_toml_for_a_toml_output(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "fragments").mkdir()
+    _write_fragment(tmp_path, "fragments/mark.yaml", 1)
+    (tmp_path / "targets.yaml").write_text(
+        f"""
+version: 1
+outputs:
+  main:
+    path: "{tmp_path}/rendered/{{target}}"
+    format: toml
+targets:
+  t:
+    outputs:
+      main:
+        fragments: [mark]
+"""
+    )
+    exit_code = main(
+        ["render", "t", "--inventory", str(tmp_path / "targets.yaml"), "--stdout"]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    out = capsys.readouterr().out
+    assert tomllib.loads(out) == {"value": 1}
+
+
+def test_serialization_failure_exits_nine(tmp_path: Path) -> None:
+    (tmp_path / "fragments").mkdir()
+    (tmp_path / "fragments" / "nullify.yaml").write_text(
+        """
+fragment:
+  version: 1
+  description: marks
+operations:
+  - op: set
+    path: /value
+    value: null
+"""
+    )
+    (tmp_path / "targets.yaml").write_text(
+        f"""
+version: 1
+outputs:
+  main:
+    path: "{tmp_path}/rendered/{{target}}"
+    format: toml
+targets:
+  t:
+    outputs:
+      main:
+        fragments: [nullify]
+"""
+    )
+    exit_code = main(["render", "t", "--inventory", str(tmp_path / "targets.yaml")])
+    assert exit_code == ExitCode.SERIALIZATION
+
+
+def test_ambiguous_fragment_exits_four(tmp_path: Path) -> None:
+    (tmp_path / "fragments").mkdir()
+    _write_fragment(tmp_path, "fragments/mark.yaml", 1)
+    (tmp_path / "fragments" / "mark.toml").write_text(
+        '[fragment]\nversion = 1\ndescription = "marks"\n'
+    )
+    (tmp_path / "targets.yaml").write_text(
+        f"""
+version: 1
+outputs:
+  main:
+    path: "{tmp_path}/rendered/{{target}}"
+targets:
+  t:
+    outputs:
+      main:
+        fragments: [mark]
+"""
+    )
+    exit_code = main(["render", "t", "--inventory", str(tmp_path / "targets.yaml")])
+    assert exit_code == ExitCode.FRAGMENT_VALIDATION
+
+
+def test_unknown_output_format_exits_seven(tmp_path: Path) -> None:
+    (tmp_path / "fragments").mkdir()
+    _write_fragment(tmp_path, "fragments/mark.yaml", 1)
+    (tmp_path / "targets.yaml").write_text(
+        f"""
+version: 1
+outputs:
+  main:
+    path: "{tmp_path}/rendered/{{target}}"
+    format: xml
+targets:
+  t:
+    outputs:
+      main:
+        fragments: [mark]
+"""
+    )
+    exit_code = main(["render", "t", "--inventory", str(tmp_path / "targets.yaml")])
+    assert exit_code == ExitCode.MODULE_ERROR
+
+
+def test_output_override_does_not_change_the_serialization_format(tmp_path: Path) -> None:
+    """`--output PATH` redirects the destination; it never reinterprets what
+    format the bytes are written in."""
+    (tmp_path / "fragments").mkdir()
+    _write_fragment(tmp_path, "fragments/mark.yaml", 1)
+    (tmp_path / "targets.yaml").write_text(
+        f"""
+version: 1
+outputs:
+  main:
+    path: "{tmp_path}/rendered/{{target}}"
+    format: json
+targets:
+  t:
+    outputs:
+      main:
+        fragments: [mark]
+"""
+    )
+    out_path = tmp_path / "custom-name.yaml"
+    exit_code = main(
+        [
+            "render",
+            "t",
+            "--inventory",
+            str(tmp_path / "targets.yaml"),
+            "--output",
+            str(out_path),
+        ]
+    )
+    assert exit_code == ExitCode.SUCCESS
+    # Still JSON text despite the ".yaml"-looking destination name.
+    assert json.loads(out_path.read_text()) == {"value": 1}
+
+
+def test_validator_receives_a_file_named_like_the_output(tmp_path: Path) -> None:
+    """The validator's temp copy is named like the output would actually be
+    written (basename + extension), not a bare `output`, so a
+    format-sensitive validator has something to sniff."""
+    (tmp_path / "fragments").mkdir()
+    _write_fragment(tmp_path, "fragments/mark.yaml", 1)
+    check_script = tmp_path / "check_name.py"
+    check_script.write_text(
+        "import sys, pathlib\n"
+        "sys.exit(0 if pathlib.Path(sys.argv[1]).name == 't.json' else 1)\n"
+    )
+    (tmp_path / "targets.yaml").write_text(
+        f"""
+version: 1
+outputs:
+  main:
+    path: "{tmp_path}/rendered/{{target}}.json"
+validators:
+  check-name:
+    command: [{sys.executable!r}, {str(check_script)!r}]
+targets:
+  t:
+    outputs:
+      main:
+        fragments: [mark]
+"""
+    )
+    exit_code = main(
+        [
+            "render",
+            "t",
+            "--inventory",
+            str(tmp_path / "targets.yaml"),
+            "--validator",
+            "check-name",
+        ]
+    )
+    assert exit_code == ExitCode.SUCCESS
+
+
+def test_list_fragments_includes_toml_and_json_fragments(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    (tmp_path / "fragments").mkdir()
+    _write_fragment(tmp_path, "fragments/from-yaml.yaml", 1)
+    (tmp_path / "fragments" / "from-toml.toml").write_text(
+        '[fragment]\nversion = 1\ndescription = "x"\n'
+    )
+    (tmp_path / "fragments" / "from-json.json").write_text(
+        '{"fragment": {"version": 1, "description": "x"}}'
+    )
+    (tmp_path / "targets.yaml").write_text(
+        f"""
+version: 1
+outputs:
+  main:
+    path: "{tmp_path}/rendered/{{target}}"
+targets:
+  t: {{}}
+"""
+    )
+    exit_code = main(["list", "fragments", "--inventory", str(tmp_path / "targets.yaml")])
+    assert exit_code == ExitCode.SUCCESS
+    out = capsys.readouterr().out
+    assert "from-yaml" in out
+    assert "from-toml" in out
+    assert "from-json" in out
+
+
+def test_list_fragments_reports_an_ambiguous_stem(tmp_path: Path) -> None:
+    (tmp_path / "fragments").mkdir()
+    _write_fragment(tmp_path, "fragments/mark.yaml", 1)
+    (tmp_path / "fragments" / "mark.toml").write_text(
+        '[fragment]\nversion = 1\ndescription = "x"\n'
+    )
+    (tmp_path / "targets.yaml").write_text(
+        f"""
+version: 1
+outputs:
+  main:
+    path: "{tmp_path}/rendered/{{target}}"
+targets:
+  t: {{}}
+"""
+    )
+    exit_code = main(["list", "fragments", "--inventory", str(tmp_path / "targets.yaml")])
+    assert exit_code == ExitCode.FRAGMENT_VALIDATION
 
 
 def test_explain_output(repo_root: Path, capsys: pytest.CaptureFixture[str]) -> None:

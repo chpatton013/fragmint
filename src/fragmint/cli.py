@@ -631,22 +631,39 @@ def validate(
         selected = render_mod.select_validators(project, output_spec, validators)
         if selected:
             with tempfile.TemporaryDirectory() as tmp_dir:
-                tmp_path = Path(tmp_dir) / "output"
+                tmp_path = Path(tmp_dir) / _validator_temp_filename(output_spec, target)
                 render_mod.write_output(text, tmp_path)
                 for validator_name in selected:
                     spec = project.validators[validator_name]
                     validation_mod.run_validator(tmp_path, spec.command)
 
 
+def _validator_temp_filename(output_spec: OutputSpec, target: str | None) -> str:
+    """The filename to give a validator's temp copy of a rendered output —
+    the same basename the output would actually be written under, so a
+    format-sensitive validator (a JSON schema CLI, a TOML linter, anything
+    that sniffs by extension) has something to go on, rather than a bare
+    ``output`` with no extension."""
+    if output_spec.scope == "aggregate":
+        return render_mod.resolve_aggregate_output_path(output_spec).name
+    assert target is not None, "a `scope: target` output needs a target name"
+    return render_mod.resolve_output_path(output_spec, target).name
+
+
 def _validate_rendered(
-    project: Project, name: str, rendered: RenderedOutput, requested: tuple[str, ...]
+    project: Project,
+    name: str,
+    rendered: RenderedOutput,
+    requested: tuple[str, ...],
+    *,
+    target: str | None = None,
 ) -> None:
     output_spec = project.outputs[name]
     text = render_mod.compose_output(rendered, output_spec)
     selected = render_mod.select_validators(project, output_spec, requested)
     if selected:
         with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir) / "output"
+            tmp_path = Path(tmp_dir) / _validator_temp_filename(output_spec, target)
             render_mod.write_output(text, tmp_path)
             for validator_name in selected:
                 spec = project.validators[validator_name]
@@ -690,7 +707,9 @@ def validate_all(
                 for name in names:
                     if name not in result.outputs:
                         continue
-                    _validate_rendered(project, name, result.outputs[name], validators)
+                    _validate_rendered(
+                        project, name, result.outputs[name], validators, target=target_name
+                    )
             except FragmintError as exc:
                 click.echo(f"{target_name}: {exc}", err=True)
                 failed.append(target_name)

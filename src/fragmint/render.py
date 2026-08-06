@@ -41,7 +41,13 @@ from pathlib import Path
 from . import formats, merge, modules, sources, templating, validation
 from . import fragments as fragments_mod
 from . import pointer as pointer_mod
-from .errors import FragmintError, InventoryError, ModuleError, TemplateRenderError
+from .errors import (
+    FragmintError,
+    InventoryError,
+    ModuleError,
+    SerializationError,
+    TemplateRenderError,
+)
 from .inventory import RESERVED_VARIABLE_NAMES, load_secret_store, resolve_target
 from .models import (
     DataValue,
@@ -719,16 +725,22 @@ def render_target(
 def compose_output(result: RenderedOutput, output: OutputSpec) -> str:
     """Produce the final output text for one rendered output.
 
-    Serialize ``result.document`` deterministically via
-    :func:`fragmint.formats.dump_document`. If ``output.template`` is set,
-    read that file and replace the literal :data:`DOCUMENT_TOKEN` with the
-    serialized document; otherwise use it verbatim. This is how a project
-    adds a header such as ``#cloud-config``. Ends with a single trailing
-    newline. Scope-agnostic: works identically for a per-target or an
-    aggregate result (README.md "Aggregate outputs": the aggregate path adds
-    no new serialization or templating code).
+    Serialize ``result.document`` deterministically, in ``output.format``,
+    via :func:`fragmint.formats.dump_document`. A value that format cannot
+    express raises :class:`~fragmint.errors.SerializationError` naming this
+    output and the JSON Pointer path (README.md "Serialization"). If
+    ``output.template`` is set, read that file and replace the literal
+    :data:`DOCUMENT_TOKEN` with the serialized document; otherwise use it
+    verbatim. This is how a project adds a header such as
+    ``#cloud-config``. Ends with a single trailing newline. Scope-agnostic:
+    works identically for a per-target or an aggregate result (README.md
+    "Aggregate outputs": the aggregate path adds no new serialization or
+    templating code).
     """
-    text = formats.dump_document(result.document, "yaml")
+    try:
+        text = formats.dump_document(result.document, output.format)
+    except SerializationError as exc:
+        raise SerializationError(f"[{result.name}] {exc}") from exc
 
     if output.template:
         template_text = Path(output.template).read_text(encoding="utf-8")

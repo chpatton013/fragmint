@@ -294,22 +294,28 @@ class OutputSpec:
 
     A project declares one or more named outputs (e.g. ``user-data``,
     ``meta-data``); each is entirely independent — its own path, template,
-    schema, and validators. ``path`` is a destination pattern containing
-    ``{target}`` for ``scope: target`` outputs (the default); an aggregate
-    output's ``path`` is a single fixed path and must NOT contain
-    ``{target}`` (enforced in :mod:`config`, a config error otherwise).
-    ``template`` is an optional text-template file into which the
-    serialized YAML is injected (replacing the literal token ``{{ document
-    }}``); when ``None`` the serialized YAML is written verbatim. ``schema`` is
-    an optional JSON schema the rendered document is validated against.
-    ``validators`` names the validators run by default for this output.
-    ``default`` marks the output implied by commands like ``--stdout`` when a
-    target produces more than one output and no ``--only`` is given (see
-    README.md "CLI usage"); an aggregate output may never be ``default: true``
-    (also enforced in :mod:`modules`) since ``default`` exists solely to
-    disambiguate per-target commands. ``scope`` is ``"target"`` (the default:
-    one document per target) or ``"aggregate"`` (one document composed across
-    every contributing target; see README.md "Aggregate outputs").
+    schema, validators, and format. ``path`` is a destination pattern
+    containing ``{target}`` for ``scope: target`` outputs (the default); an
+    aggregate output's ``path`` is a single fixed path and must NOT contain
+    ``{target}`` (enforced in :mod:`modules`, a config error otherwise).
+    ``format`` is the concrete serialization format this output is always
+    written in — resolved once, at document load time, from (in order) an
+    explicit ``format:``, the suffix of ``path`` *before* ``{target}``
+    substitution, then ``"yaml"`` (see :mod:`fragmint.formats` and
+    README.md "Outputs and validators across the closure"). ``template`` is
+    an optional text-template file into which the document, serialized in
+    ``format``, is injected (replacing the literal token ``{{ document
+    }}``); when ``None`` the serialized document is written verbatim.
+    ``schema`` is an optional JSON schema the rendered document is validated
+    against. ``validators`` names the validators run by default for this
+    output. ``default`` marks the output implied by commands like
+    ``--stdout`` when a target produces more than one output and no
+    ``--only`` is given (see README.md "CLI usage"); an aggregate output may
+    never be ``default: true`` (also enforced in :mod:`modules`) since
+    ``default`` exists solely to disambiguate per-target commands. ``scope``
+    is ``"target"`` (the default: one document per target) or ``"aggregate"``
+    (one document composed across every contributing target; see README.md
+    "Aggregate outputs").
     """
 
     path: str = "rendered/{target}"
@@ -317,6 +323,7 @@ class OutputSpec:
     schema: str | None = None
     validators: tuple[str, ...] = ()
     default: bool = False
+    format: Format = "yaml"
     scope: Literal["target", "aggregate"] = "target"
 
 
