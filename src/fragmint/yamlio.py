@@ -55,24 +55,18 @@ _load_yaml.allow_duplicate_keys = False
 # it needs no loader/dumper instance to answer a single scalar's tag.
 _resolver_1_1 = VersionedResolver(version=(1, 1))
 
-# The YAML 1.1 *spec*'s core schema lists bare `y`/`Y`/`n`/`N` as boolean
-# aliases, and ruamel's resolver (above) follows the spec here. PyYAML does
-# not: its bool implicit-resolver regex
-# (``yaml.resolver.Resolver.add_implicit_resolver`` for
-# ``tag:yaml.org,2002:bool``, checked against pyyaml 6.x) lists only
-# yes/Yes/YES/no/No/NO/true/True/TRUE/false/False/FALSE/on/On/ON/off/Off/OFF —
-# no bare y/Y/n/N. Since cloud-init and most other real-world consumers parse
-# with PyYAML, these four letters read back as themselves and do not need
-# quoting, even though the spec-faithful resolver above would flag them.
-_YAML_1_1_SPEC_PYYAML_DIVERGENCE = frozenset({"y", "Y", "n", "N"})
-
-
 @cache
 def _needs_yaml_1_1_quoting(value: str) -> bool:
     """True if a YAML 1.1 parser would not read ``value`` back as this exact
-    string when emitted as a bare (unquoted) plain scalar."""
-    if value in _YAML_1_1_SPEC_PYYAML_DIVERGENCE:
-        return False
+    string when emitted as a bare (unquoted) plain scalar.
+
+    The spec's resolver is the sole authority, deliberately including cases a
+    given implementation happens to be laxer about: bare ``y``/``n`` are
+    boolean aliases per the spec, so they are quoted even though PyYAML alone
+    would read them back as strings. Quoting a scalar no reader would have
+    retyped costs two characters; leaving one bare that some reader retypes
+    corrupts a value silently.
+    """
     tag = _resolver_1_1.resolve(ScalarNode, value, (True, False))
     return bool(tag.suffix != "tag:yaml.org,2002:str")
 

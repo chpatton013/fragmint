@@ -1303,7 +1303,9 @@ Output is stable and diff-friendly:
   1.1 reader — the emitter targets YAML 1.2, but common consumers, including
   cloud-init's PyYAML-based parser, parse YAML 1.1, where values such as
   `no`, `off`, and `12:30` are booleans or sexagesimal integers rather than
-  strings; otherwise leave strings unquoted;
+  strings. The YAML 1.1 spec decides this, not any one parser's leniency, so a
+  value some readers would tolerate bare is still quoted; otherwise leave
+  strings unquoted;
 - prefer block style for multiline strings;
 - end files with exactly one newline.
 

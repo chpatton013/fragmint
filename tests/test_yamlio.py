@@ -17,11 +17,12 @@ from fragmint.yamlio import dump_str
 # schema) and sexagesimal (h:mm[:ss]) integers (also dropped in 1.2).
 CORRUPTING_VALUES = ["yes", "no", "on", "off", "12:30", "1:2:3"]
 
-# `y`, `n`, `Y`, `N` are boolean aliases per the YAML 1.1 *spec*, but PyYAML's
-# concrete resolver does not implement that alias (its bool regex only lists
-# yes/Yes/YES/no/No/NO/true/.../on/.../off/...), so real-world 1.1 consumers
-# read these back as the string itself. They must stay unquoted.
-SAFE_LETTER_VALUES = ["y", "n", "Y", "N"]
+# Boolean aliases per the YAML 1.1 *spec*. PyYAML's concrete resolver happens
+# not to implement this alias (its bool regex lists only
+# yes/Yes/YES/no/No/NO/true/.../on/.../off/...), so PyYAML alone reads these
+# back as strings either way. They are quoted regardless: the spec is the
+# authority, so a stricter reader cannot retype them.
+SPEC_ONLY_BOOLEAN_ALIASES = ["y", "n", "Y", "N"]
 
 
 @pytest.mark.parametrize("value", CORRUPTING_VALUES)
@@ -30,10 +31,13 @@ def test_yaml_1_1_corrupting_values_are_quoted(value: str) -> None:
     assert text == f"key: '{value}'\n"
 
 
-@pytest.mark.parametrize("value", SAFE_LETTER_VALUES)
-def test_safe_letter_values_stay_unquoted(value: str) -> None:
+@pytest.mark.parametrize("value", SPEC_ONLY_BOOLEAN_ALIASES)
+def test_spec_only_boolean_aliases_are_quoted(value: str) -> None:
+    """Quoted on the spec resolver's authority alone, without consulting any
+    particular reader's leniency — a bare `y` is a boolean to a spec-faithful
+    YAML 1.1 parser."""
     text = dump_str({"key": value})
-    assert text == f"key: {value}\n"
+    assert text == f"key: '{value}'\n"
 
 
 def test_real_booleans_still_emit_bare() -> None:
