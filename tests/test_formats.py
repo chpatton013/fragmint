@@ -230,6 +230,47 @@ def test_yaml_load_accepts_a_quoted_numeric_looking_string_key(tmp_path: Path) -
     assert data == {"1": "x"}
 
 
+# --- YAML: timestamps stay verbatim ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "2020-01-02T03:04:05Z",
+        "2020-01-02t03:04:05z",
+        "2020-01-02 03:04:05",
+        "2020-01-02T03:04:05.5+05:30",
+        "2020-01-02T03:04:05+0000",
+        "2020-01-02",
+    ],
+)
+def test_yaml_load_keeps_a_timestamp_as_its_source_text(value: str, tmp_path: Path) -> None:
+    data = codec_for("yaml").load(f"a: {value}\n", path=tmp_path / "f.yaml")
+    assert data == {"a": value}
+
+
+def test_yaml_load_keeps_an_explicitly_tagged_timestamp_verbatim(tmp_path: Path) -> None:
+    data = codec_for("yaml").load(
+        "a: !!timestamp 2001-12-14 21:59:43.10 -5\n", path=tmp_path / "f.yaml"
+    )
+    assert data == {"a": "2001-12-14 21:59:43.10 -5"}
+
+
+def test_yaml_timestamp_round_trips_through_dump_unchanged(tmp_path: Path) -> None:
+    """A bare timestamp survives a full load/dump cycle as the same text: kept
+    verbatim on the way in, quoted on the way out so no reader retypes it."""
+    yaml = codec_for("yaml")
+    text = yaml.dump(yaml.load("a: 2020-01-02T03:04:05Z\n", path=tmp_path / "f.yaml"))
+    assert text == "a: '2020-01-02T03:04:05Z'\n"
+    assert yaml.load(text, path=tmp_path / "f.yaml") == {"a": "2020-01-02T03:04:05Z"}
+
+
+def test_yaml_timestamp_reaches_json_and_toml_as_its_source_text(tmp_path: Path) -> None:
+    data = codec_for("yaml").load("a: 2020-01-02T03:04:05Z\n", path=tmp_path / "f.yaml")
+    assert json.loads(codec_for("json").dump(data)) == {"a": "2020-01-02T03:04:05Z"}
+    assert tomllib.loads(codec_for("toml").dump(data)) == {"a": "2020-01-02T03:04:05Z"}
+
+
 # --- TOML: date/time input rejection -------------------------------------------
 
 

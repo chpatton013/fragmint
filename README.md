@@ -111,13 +111,15 @@ specific restrictions fall out of this:
    one fails closed naming the file and the pointer, telling the author to
    quote the value as a string. This makes a TOML fragment strictly less
    expressive than an equivalent YAML fragment, not merely differently
-   written: a YAML fragment writing an unquoted timestamp is accepted and
-   stringified (a long-standing behavior kept for backward compatibility,
-   even though the string it produces is not the canonical form of what was
-   written); the same value in TOML is a hard error instead. This asymmetry
-   is deliberate — YAML's stringification is an existing contract with users,
-   while TOML input has none yet, so it starts closed rather than repeating
-   YAML's looseness in new surface.
+   written: a YAML fragment may write an unquoted timestamp, which loads as
+   the string of exactly the characters the file contains
+   (`2020-01-02T03:04:05Z` stays `2020-01-02T03:04:05Z`, not some other
+   spelling of the same instant) and is quoted on output so no reader retypes
+   it; the same value in TOML is a hard error instead. The asymmetry is one
+   of parsers, not of policy: both formats treat a timestamp as text, but a
+   TOML parser resolves the value and discards the source spelling before
+   fragmint sees it, leaving nothing to preserve — so TOML asks the author to
+   quote it rather than inventing a spelling on their behalf.
 
 Type-fidelity matrix — every row reflects an actual, checked behavior of the
 concrete writer for that format:
@@ -1881,8 +1883,7 @@ already supported); encrypted outputs; fragment deprecation warnings;
 fragment dependency declarations; optional fragment conditions; multi-format
 support for the inventory/module/secrets documents themselves; a `--format`
 override flag that would reinterpret `--output`'s destination rather than
-just redirect it; making YAML input's silent date/time stringification fail
-closed the way TOML input already does.
+just redirect it.
 
 ## Development
 

@@ -36,7 +36,7 @@ from typing import Any, Protocol, cast
 
 import tomli_w
 from ruamel.yaml import YAML
-from ruamel.yaml.constructor import DuplicateKeyError
+from ruamel.yaml.constructor import DuplicateKeyError, SafeConstructor
 from ruamel.yaml.error import YAMLError
 from ruamel.yaml.nodes import ScalarNode
 from ruamel.yaml.resolver import VersionedResolver
@@ -116,7 +116,27 @@ def _normalize(node: Any, ptr: str = "", *, path: Path) -> DataValue:
 # YAML
 # --------------------------------------------------------------------------
 
+class _VerbatimTimestampConstructor(SafeConstructor):
+    """Safe constructor that hands back a timestamp's source text instead of a
+    :class:`datetime.datetime`.
+
+    :data:`~fragmint.models.DataValue` has no date/time type, so a constructed
+    ``datetime`` could only reach the model as ``str(value)`` — Python's
+    spelling, not the author's: ``2020-01-02T03:04:05Z`` would come back as
+    ``2020-01-02 03:04:05+00:00``, a different string than the file contains.
+    Keeping the scalar verbatim means an unquoted timestamp composes and
+    round-trips as exactly the text that was written. The emitter then
+    single-quotes it on the way out (:func:`_needs_yaml_1_1_quoting` resolves
+    the timestamp tag), so no downstream reader retypes it either.
+    """
+
+
+_VerbatimTimestampConstructor.add_constructor(
+    "tag:yaml.org,2002:timestamp", lambda self, node: str(node.value)
+)
+
 _load_yaml = YAML(typ="safe")
+_load_yaml.Constructor = _VerbatimTimestampConstructor
 _load_yaml.allow_duplicate_keys = False
 
 # Drives ruamel's own YAML 1.1 implicit-tag resolver (the core-schema rules a
@@ -250,10 +270,12 @@ class _TomlCodec:
 
 def _reject_toml_datetimes(node: Any, ptr: str, *, path: Path) -> None:
     """TOML's ``date``/``time``/``datetime`` types have no home in
-    :data:`~fragmint.models.DataValue`; unlike YAML (which stringifies them
-    for backward compatibility — see :mod:`_normalize`'s fallback), TOML input
-    fails closed on them, naming the pointer and telling the author to quote
-    the value. See README.md "Supported formats"."""
+    :data:`~fragmint.models.DataValue`. YAML keeps a timestamp's source text
+    (see :class:`_VerbatimTimestampConstructor`), but ``tomllib`` resolves the
+    value and drops the spelling before this module sees it, leaving nothing
+    to preserve — so TOML input fails closed, naming the pointer and telling
+    the author to quote the value rather than picking a spelling for them.
+    See README.md "Supported formats"."""
     if isinstance(node, (datetime.date, datetime.time)):
         raise FragmintError(
             f"cannot load {path}: a date/time value at {ptr or '/'} has no "
