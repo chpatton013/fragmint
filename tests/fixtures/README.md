@@ -20,10 +20,14 @@ fragmint render <target> --output tests/fixtures/expected/<target>/user-data
 ```
 
 Review the diff before committing — the snapshot is the reviewed contract.
-All of these snapshots are YAML and are not touched by multi-format work
-(README.md "Supported formats"); TOML/JSON input and output cases are
+These per-target snapshots and `explain-*.txt` are YAML/text and stay
+byte-identical across format work; most TOML/JSON input and output cases are
 covered by synthetic trees (the `closure_from_tree` fixture) in the test
-suite instead, precisely so `example/` stays untouched as this corpus.
+suite instead, so this corpus stays a stable regression gate. The
+`ansible-inventory.json` snapshot below is the exception: it exercises the
+JSON output path through the shipped example itself, alongside a TOML input
+fragment (`example/modules/ansible/fragments/ansible/checks.toml`), so the
+example also guards the non-YAML paths end to end.
 
 `tests/fixtures/expected/ansible-inventory.yaml` is the analogous snapshot for
 the example project's `scope: aggregate` output (README.md "Aggregate
@@ -31,6 +35,16 @@ outputs"), composed once across every target rather than per target:
 
 ```bash
 fragmint render-all --only ansible-inventory --output tests/fixtures/expected/ansible-inventory.yaml
+```
+
+`tests/fixtures/expected/ansible-inventory.json` is the same composed
+document, serialized as JSON by the `ansible-inventory-json` output — the
+two outputs share every fragment and differ only in `format`, so this
+fixture is the regression guard for the JSON serialization path exercised
+through the shipped example rather than a synthetic tree:
+
+```bash
+fragmint render-all --only ansible-inventory-json --output tests/fixtures/expected/ansible-inventory.json
 ```
 
 `tests/fixtures/expected/explain-gb10-01.txt` and

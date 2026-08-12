@@ -1499,6 +1499,24 @@ def test_aggregate_snapshot_matches_expected(
     assert text.encode("utf-8") == expected
 
 
+def test_aggregate_json_snapshot_matches_expected(
+    example_closure, secrets_example_path: Path, fixtures_dir: Path, stub_runner
+) -> None:
+    """`ansible-inventory-json` composes the same document as
+    `ansible-inventory` (they share every fragment) but serializes it as
+    JSON, matching its own committed snapshot byte for byte — the
+    regression guard for the non-YAML output path, exercised end to end
+    through the shipped example rather than a synthetic tree."""
+    session = render_mod.RenderSession(
+        example_closure, secrets_path=secrets_example_path, runner=stub_runner
+    )
+    rendered = session.render_aggregate("ansible-inventory-json")
+    assert rendered is not None
+    text = render_mod.compose_output(rendered, session.project.outputs["ansible-inventory-json"])
+    expected = (fixtures_dir / "expected" / "ansible-inventory.json").read_bytes()
+    assert text.encode("utf-8") == expected
+
+
 def test_render_target_outputs_skips_aggregate_scope(
     example_closure, secrets_example_path: Path, stub_runner
 ) -> None:

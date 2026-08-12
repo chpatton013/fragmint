@@ -1131,6 +1131,7 @@ def test_list_outputs_shows_scope(repo_root: Path, capsys: pytest.CaptureFixture
     assert "user-data\ttarget\tautoinstall" in out
     assert "meta-data\ttarget\tautoinstall" in out
     assert "ansible-inventory\taggregate\tansible" in out
+    assert "ansible-inventory-json\taggregate\tansible" in out
 
 
 def test_render_target_silently_skips_aggregate_output(
@@ -1164,7 +1165,9 @@ def test_validate_target_only_aggregate_output_is_module_error(repo_root: Path) 
 
 def test_render_all_writes_both_per_target_and_aggregate_outputs(repo_root: Path) -> None:
     """`render-all` (no --only) writes every per-target output for every
-    target, then the aggregate output once."""
+    target, then every aggregate output once — including the YAML and JSON
+    twins of the ansible inventory, which share every fragment and differ
+    only in serialization format."""
     exit_code = main(["render-all", *_example_args(repo_root)])
     assert exit_code == ExitCode.SUCCESS
     autoinstall_dir = repo_root / AUTOINSTALL_RENDERED
@@ -1176,10 +1179,14 @@ def test_render_all_writes_both_per_target_and_aggregate_outputs(repo_root: Path
         assert "gb10-01" in inventory_text
         assert "gb10-02" in inventory_text
         assert "generic-vm-01" in inventory_text
+        inventory_json = json.loads((ansible_dir / "inventory.json").read_text())
+        assert "gb10-01" in inventory_json["all"]["children"]["gb10"]["hosts"]
+        assert "generic-vm-01" in inventory_json["all"]["children"]["generic_vm"]["hosts"]
     finally:
         for name in ("gb10-01", "gb10-02", "generic-vm-01"):
             shutil.rmtree(autoinstall_dir / name, ignore_errors=True)
         (ansible_dir / "inventory.yaml").unlink(missing_ok=True)
+        (ansible_dir / "inventory.json").unlink(missing_ok=True)
 
 
 def test_render_all_only_scopes_to_single_aggregate_output(tmp_path: Path, repo_root: Path) -> None:
@@ -1263,6 +1270,7 @@ def test_render_all_only_scopes_to_single_target_output(repo_root: Path) -> None
         assert (autoinstall_dir / "gb10-01" / "meta-data").is_file()
         assert not (autoinstall_dir / "gb10-01" / "user-data").exists()
         assert not (repo_root / ANSIBLE_RENDERED / "inventory.yaml").exists()
+        assert not (repo_root / ANSIBLE_RENDERED / "inventory.json").exists()
     finally:
         for name in ("gb10-01", "gb10-02", "generic-vm-01"):
             shutil.rmtree(autoinstall_dir / name, ignore_errors=True)

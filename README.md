@@ -206,9 +206,13 @@ independently of whatever inventory imports it.
 This repository ships one such project, the Ubuntu autoinstall example, under
 `example/`. Its inventory imports two modules — `autoinstall` (which owns the
 `user-data`/`meta-data` outputs) and `ansible` (which owns the aggregate
-`ansible-inventory` output) — to demonstrate multi-file output, both output
-scopes, and the module model itself (see "The module model", "Fragment
-order", and "Aggregate outputs" below):
+`ansible-inventory` and `ansible-inventory-json` outputs) — to demonstrate
+multi-file output, both output scopes, and the module model itself (see "The
+module model", "Fragment order", and "Aggregate outputs" below). It also
+exercises multi-format support end to end: `ansible-inventory-json` is a
+JSON twin of `ansible-inventory` (same fragments, same schema, a different
+`format`), and one of the ansible module's own fragments is written in TOML
+(see "Supported formats"):
 
 ```
 example/
@@ -221,9 +225,9 @@ example/
     │   ├── fragments/
     │   ├── templates/
     │   └── rendered/      Output (git-ignored).
-    └── ansible/            Reusable module: the aggregate ansible-inventory output.
+    └── ansible/            Reusable module: the aggregate ansible-inventory/ansible-inventory-json outputs.
         ├── fragmint.yaml
-        ├── fragments/
+        ├── fragments/      One fragment (ansible/checks.toml) is TOML, not YAML.
         ├── schemas/
         └── rendered/      Output (git-ignored).
 ```
@@ -1719,8 +1723,9 @@ already-loaded closure.
 
 The repository ships a complete example that renders Ubuntu 24.04 autoinstall
 `user-data` plus a cloud-init `meta-data` file per target, and a `scope:
-aggregate` Ansible inventory across every target, demonstrating multi-output
-routing and both output scopes in practice:
+aggregate` Ansible inventory across every target — in both YAML and JSON —
+demonstrating multi-output routing, both output scopes, and format
+independence in practice:
 
 - `example/targets.yaml` is the inventory (the render root): it imports two
   modules, `autoinstall: modules/autoinstall` and `ansible: modules/ansible`,
@@ -1734,19 +1739,25 @@ routing and both output scopes in practice:
   importing target's `user-data`/`meta-data` fragments are opted in at once),
   and the `gb10`/`generic_vm`/`general_servers`/`proxmox_hosts`/`docker_hosts`
   groups' fragments.
-- `example/modules/ansible/fragmint.yaml` owns the aggregate
-  `ansible-inventory` output (`scope: aggregate`; `path:
+- `example/modules/ansible/fragmint.yaml` owns two aggregate outputs sharing
+  one document: `ansible-inventory` (`scope: aggregate`; `path:
   rendered/inventory.yaml`, a single fixed file for the whole run; `schema:
-  ansible-inventory.schema.json` for whole-document shape validation), its
-  `defaults.outputs.ansible-inventory.fragments: [host]`, an
-  `aggregate.outputs.ansible-inventory.epilogue: [checks]` for a
-  whole-document fact the schema cannot express (see "Aggregate outputs" for
-  why this, rather than the trailing-assertion-fragment idiom the other two
-  outputs use, is how an aggregate output gets that check), and a `gb10`/
-  `generic_vm` group setting `ansible_group` — each merges with the
-  same-named group the `autoinstall` module and the inventory itself
-  contribute to (README.md "Composition and ordering"). Each target sets
-  `ansible_host`, consumed only by `ansible:host`.
+  ansible-inventory.schema.json` for whole-document shape validation) and
+  `ansible-inventory-json` (identical scope, fragments, and schema; `path:
+  rendered/inventory.json`, so its format infers to JSON) — a YAML file for
+  human review alongside a JSON file for a consumer that expects
+  `ansible-inventory --list`-style JSON, from the same fragments (README.md
+  "Outputs and validators across the closure": `format` is a fixed property
+  of the output, independent of scope, fragments, and schema). Both outputs
+  share `defaults.outputs.<name>.fragments: [host]` and
+  `aggregate.outputs.<name>.epilogue: [checks]` for a whole-document fact the
+  schema cannot express (see "Aggregate outputs" for why this, rather than
+  the trailing-assertion-fragment idiom the other two outputs use, is how an
+  aggregate output gets that check), and a `gb10`/`generic_vm` group setting
+  `ansible_group` — each merges with the same-named group the `autoinstall`
+  module and the inventory itself contribute to (README.md "Composition and
+  ordering"). Each target sets `ansible_host`, consumed only by
+  `ansible:host`.
 - `example/modules/autoinstall/fragments/autoinstall/base.yaml`,
   `default-user.yaml`, and `checks.yaml`,
   `example/modules/autoinstall/fragments/ubuntu-24.04.yaml`,
@@ -1757,13 +1768,16 @@ routing and both output scopes in practice:
   `example/modules/autoinstall/fragments/meta/instance-id.yaml` builds the
   `meta-data` document (just `instance-id` and `local-hostname`, both from
   `identity_hostname`); `example/modules/ansible/fragments/ansible/host.yaml`
-  builds the `ansible-inventory` document, one target at a time, using a
-  templated operation *path* (`/all/children/{{ ansible_group }}/hosts/{{
-  target }}`) to place each contributing target under its own key of the
-  shared document; `example/modules/ansible/fragments/ansible/checks.yaml`
-  runs once, as that output's epilogue, after every contributing target, and
-  asserts that the `gb10` group the module ships is actually populated in the
-  finished document.
+  builds the `ansible-inventory`/`ansible-inventory-json` document, one
+  target at a time, using a templated operation *path*
+  (`/all/children/{{ ansible_group }}/hosts/{{ target }}`) to place each
+  contributing target under its own key of the shared document;
+  `example/modules/ansible/fragments/ansible/checks.toml` runs once, as each
+  of those outputs' epilogue, after every contributing target, and asserts
+  that the `gb10` group the module ships is actually populated in the
+  finished document — written in TOML rather than YAML to demonstrate that a
+  fragment's own format is independent of any output's (README.md
+  "Supported formats").
 - Each target's `identity_password_hash` is a `capture` source that runs
   `openssl passwd -6` over the plaintext password held in the secret store
   (`example/secrets.example.yaml` shows the shape).

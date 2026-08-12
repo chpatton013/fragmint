@@ -1202,10 +1202,22 @@ def test_real_example_closure_loads(example_closure) -> None:
 
 def test_real_example_flattens(example_closure) -> None:
     project = modules.flatten(example_closure)
-    assert set(project.outputs) == {"user-data", "meta-data", "ansible-inventory"}
+    assert set(project.outputs) == {
+        "user-data",
+        "meta-data",
+        "ansible-inventory",
+        "ansible-inventory-json",
+    }
     assert project.outputs["ansible-inventory"].scope == "aggregate"
+    assert project.outputs["ansible-inventory"].format == "yaml"
+    assert project.outputs["ansible-inventory-json"].scope == "aggregate"
+    assert project.outputs["ansible-inventory-json"].format == "json"
     assert project.default_output == "user-data"
     assert [
         modules.display_ref(r)
         for r in project.aggregate_output_fragments["ansible-inventory"].epilogue
+    ] == ["ansible:ansible/checks"]
+    assert [
+        modules.display_ref(r)
+        for r in project.aggregate_output_fragments["ansible-inventory-json"].epilogue
     ] == ["ansible:ansible/checks"]

@@ -1,0 +1,20 @@
+[fragment]
+version = 1
+description = """
+Assert facts about the finished, whole-run ansible-inventory document that \
+the JSON schema cannot express: not just that the shape is right, but that \
+the gb10 group this module ships is actually populated. Runs once, after \
+every contributing target, via the aggregate epilogue (README.md \
+"Aggregate outputs"). Written in TOML to demonstrate that a fragment's own \
+format is independent of the format(s) of the outputs it feeds — see \
+README.md "Supported formats"."""
+
+[[operations]]
+op = "assert"
+path = "/all/children"
+type = "mapping"
+
+[[operations]]
+op = "assert"
+path = "/all/children/gb10/hosts"
+exists = true
