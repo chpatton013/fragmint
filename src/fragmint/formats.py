@@ -77,17 +77,37 @@ class Codec(Protocol):
     def dump(self, document: DataValue) -> str: ...
 
 
+#: Types the safe YAML loader constructs that :data:`DataValue` cannot hold,
+#: mapped to the tag that produces each and the way to write the value
+#: instead. Reaching any of them takes an explicit tag — a plain scalar never
+#: resolves to one — so rejecting them costs an author nothing they did by
+#: accident. ``!!omap`` is absent because the safe loader already yields a
+#: plain dict for it.
+_UNMODELLED_YAML_TAGS: dict[type, tuple[str, str]] = {
+    bytes: ("!!binary", "drop the tag and keep the base64 as a plain string"),
+    set: ("!!set", "write it as a list, or as a mapping to null"),
+    tuple: ("!!pairs", "write it as a list of single-key mappings"),
+}
+
+
 def _normalize(node: Any, ptr: str = "", *, path: Path) -> DataValue:
     """Recursively convert a format library's parsed containers into plain
     dict/list/scalars. Every codec's ``load`` ends with this so all three
     formats agree on the model shape.
 
-    ``ptr`` is the JSON Pointer to ``node`` within the document, threaded
-    down the recursion so a rejected key can be reported by location rather
-    than by value alone. JSON and TOML require a mapping key to be a string
-    syntactically, so only YAML can reach the rejection below; the check runs
-    for all three codecs anyway, since this function is their shared exit
-    from the format-specific world.
+    ``ptr`` is the JSON Pointer to ``node`` within the document, threaded down
+    the recursion so a rejected key or value can be reported by location
+    rather than by value alone.
+
+    Anything the model cannot hold is rejected here rather than coerced: a
+    silent ``str()`` would turn a value into its Python repr, and for a set
+    that repr is not even stable across runs, which would break the
+    byte-identical output every writer promises. Only YAML can reach either
+    rejection — JSON and TOML require a string mapping key syntactically, and
+    their parsers emit nothing outside the model except TOML's date/time,
+    which :func:`_reject_toml_datetimes` intercepts first — but both checks
+    run for all three codecs, since this function is their shared exit from
+    the format-specific world.
     """
     if isinstance(node, dict):
         result: dict[str, DataValue] = {}
@@ -107,9 +127,17 @@ def _normalize(node: Any, ptr: str = "", *, path: Path) -> DataValue:
         ]
     if node is None or isinstance(node, (bool, int, float, str)):
         return node
-    # Fallback: coerce unexpected scalar-ish types (e.g. ruamel's own str
-    # subclasses) to plain str.
-    return str(node)
+    for cls, (tag, remedy) in _UNMODELLED_YAML_TAGS.items():
+        if isinstance(node, cls):
+            raise FragmintError(
+                f"cannot load {path}: a {tag} value at {ptr or '/'} has no home"
+                f" in fragmint's data model; {remedy}"
+            )
+    raise FragmintError(
+        f"cannot load {path}: the value at {ptr or '/'} is a "
+        f"{type(node).__name__}, which has no home in fragmint's data model;"
+        " express it as a string, list, or mapping"
+    )
 
 
 # --------------------------------------------------------------------------

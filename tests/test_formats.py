@@ -229,6 +229,47 @@ def test_yaml_load_accepts_a_quoted_numeric_looking_string_key(tmp_path: Path) -
     assert data == {"1": "x"}
 
 
+# --- YAML: values the model cannot hold -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "tag"),
+    [
+        ("a: !!binary aGk=\n", "!!binary"),
+        ("a: !!set\n  ? x\n  ? y\n", "!!set"),
+        ("a: !!pairs\n  - x: 1\n", "!!pairs"),
+    ],
+)
+def test_yaml_load_rejects_a_tag_the_model_cannot_hold(
+    text: str, tag: str, tmp_path: Path
+) -> None:
+    with pytest.raises(FragmintError) as excinfo:
+        codec_for("yaml").load(text, path=tmp_path / "f.yaml")
+    message = str(excinfo.value)
+    assert tag in message
+    assert "f.yaml" in message
+
+
+def test_yaml_load_rejects_binary_nested_deeply_naming_the_pointer(tmp_path: Path) -> None:
+    with pytest.raises(FragmintError) as excinfo:
+        codec_for("yaml").load("a:\n  - b: !!binary aGk=\n", path=tmp_path / "f.yaml")
+    assert "/a/0/b" in str(excinfo.value)
+
+
+def test_yaml_load_accepts_omap_as_a_plain_mapping(tmp_path: Path) -> None:
+    """``!!omap`` is not rejected: the safe loader already yields a plain dict
+    for it, so it needs no coercion the model cannot express."""
+    data = codec_for("yaml").load("a: !!omap\n  - x: 1\n  - y: 2\n", path=tmp_path / "f.yaml")
+    assert data == {"a": {"x": 1, "y": 2}}
+
+
+def test_yaml_load_accepts_untagged_base64_as_a_string(tmp_path: Path) -> None:
+    """The rejection is of the tag, not of base64-looking text — the remedy the
+    error suggests has to actually work."""
+    data = codec_for("yaml").load("a: aGk=\n", path=tmp_path / "f.yaml")
+    assert data == {"a": "aGk="}
+
+
 # --- YAML: timestamps stay verbatim ---------------------------------------------
 
 

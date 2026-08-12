@@ -92,6 +92,16 @@ key even though they are spelled differently; coercing every key to a string
 after the fact would let `1: a` and `'1': b` collapse into one key, with one
 value silently discarding the other.
 
+**Values are strings, numbers, booleans, null, lists, and mappings** — that
+list is exhaustive. YAML alone can name a type outside it, and only through an
+explicit tag: `!!binary` (bytes), `!!set`, and `!!pairs` are each a fail-closed
+error naming the file, the JSON Pointer, and how to write the value instead.
+(`!!omap` is fine; it loads as an ordinary mapping.) A plain scalar never
+resolves to any of these, so nothing an author writes by accident trips this.
+Coercing instead of rejecting would smuggle a Python `repr` into the output —
+`b'hi'` for `!!binary` — and for `!!set` that text is not even stable between
+runs, which would break the byte-identical output every writer promises.
+
 **The independence rule.** The input format constrains what a fragment can
 say; the output format constrains what a document can mean. They meet only
 through the values in between — a `.toml` fragment and a `.yaml` fragment
