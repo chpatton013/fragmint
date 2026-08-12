@@ -1,7 +1,6 @@
 """Tests for :mod:`fragmint.formats` — the format boundary.
 
-The YAML tests below are carried over from the module's earlier name
-(``yamlio``) and focus on the YAML 1.1 quoting rule documented in
+The YAML tests below center on the quoting rule documented in
 :mod:`fragmint.formats` and README.md "Serialization": a bare scalar that a
 YAML 1.1 parser (e.g. PyYAML, which cloud-init uses) would resolve to
 something other than the identical string must be quoted, even though
