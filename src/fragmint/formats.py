@@ -36,6 +36,7 @@ from typing import Any, Protocol, cast
 
 import tomli_w
 from ruamel.yaml import YAML
+from ruamel.yaml.constructor import DuplicateKeyError
 from ruamel.yaml.error import YAMLError
 from ruamel.yaml.nodes import ScalarNode
 from ruamel.yaml.resolver import VersionedResolver
@@ -76,14 +77,34 @@ class Codec(Protocol):
     def dump(self, document: DataValue) -> str: ...
 
 
-def _normalize(node: Any) -> DataValue:
+def _normalize(node: Any, ptr: str = "", *, path: Path) -> DataValue:
     """Recursively convert a format library's parsed containers into plain
     dict/list/scalars. Every codec's ``load`` ends with this so all three
-    formats agree on the model shape."""
+    formats agree on the model shape.
+
+    ``ptr`` is the JSON Pointer to ``node`` within the document, threaded
+    down the recursion so a rejected key can be reported by location rather
+    than by value alone. JSON and TOML require a mapping key to be a string
+    syntactically, so only YAML can reach the rejection below; the check runs
+    for all three codecs anyway, since this function is their shared exit
+    from the format-specific world.
+    """
     if isinstance(node, dict):
-        return {str(key): _normalize(value) for key, value in node.items()}
+        result: dict[str, DataValue] = {}
+        for key, value in node.items():
+            if not isinstance(key, str):
+                raise FragmintError(
+                    f"cannot load {path}: mapping key {key!r} at {ptr or '/'} "
+                    f"is not a string (it is a YAML {type(key).__name__}); "
+                    f"quote it, e.g. {str(key)!r}"
+                )
+            result[key] = _normalize(value, pointer.join(ptr, key), path=path)
+        return result
     if isinstance(node, list):
-        return [_normalize(item) for item in node]
+        return [
+            _normalize(item, pointer.join(ptr, str(index)), path=path)
+            for index, item in enumerate(node)
+        ]
     if node is None or isinstance(node, (bool, int, float, str)):
         return node
     # Fallback: coerce unexpected scalar-ish types (e.g. ruamel's own str
@@ -154,8 +175,24 @@ class _YamlCodec:
         try:
             data = _load_yaml.load(text)
         except YAMLError as exc:
-            raise FragmintError(f"invalid yaml in {path}: {exc}") from exc
-        return _normalize(data)
+            message = f"invalid yaml in {path}: {exc}"
+            # ruamel names only the *second* key it saw, stringified after
+            # type resolution (e.g. "True"), which does not show that the
+            # sibling key was spelled differently (e.g. `1`) before 1 == True
+            # collapsed them. Flag that ambiguity explicitly rather than
+            # leaving the author to guess why a key they never wrote appears
+            # in the error.
+            if isinstance(exc, DuplicateKeyError) and (
+                '"True"' in str(exc) or '"False"' in str(exc)
+            ):
+                message += (
+                    '\nnote: YAML resolves key types before comparing them, so'
+                    " `1` and `true` (or `0` and `false`) collide as mapping"
+                    " keys even though they are spelled differently; quote the"
+                    " key you meant to keep distinct, e.g. \"1\""
+                )
+            raise FragmintError(message) from exc
+        return _normalize(data, path=path)
 
     def dump(self, document: DataValue) -> str:
         yaml = YAML()
@@ -200,7 +237,7 @@ class _TomlCodec:
         except tomllib.TOMLDecodeError as exc:
             raise FragmintError(f"invalid toml in {path}: {exc}") from exc
         _reject_toml_datetimes(data, "", path=path)
-        return _normalize(data)
+        return _normalize(data, path=path)
 
     def dump(self, document: DataValue) -> str:
         _reject_null(document, "", fmt="toml")
@@ -294,7 +331,7 @@ class _JsonCodec:
             data = json.loads(text)
         except json.JSONDecodeError as exc:
             raise FragmintError(f"invalid json in {path}: {exc}") from exc
-        return _normalize(data)
+        return _normalize(data, path=path)
 
     def dump(self, document: DataValue) -> str:
         _reject_non_finite_float(document, "", fmt="json")

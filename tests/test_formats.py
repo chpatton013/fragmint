@@ -160,6 +160,76 @@ def test_loaded_mapping_keys_are_strings_in_every_format(tmp_path: Path) -> None
         assert all(isinstance(key, str) for key in data)
 
 
+# --- YAML: non-string mapping keys ---------------------------------------------
+
+
+def test_yaml_load_rejects_integer_key_naming_the_file(tmp_path: Path) -> None:
+    bad = tmp_path / "f.yaml"
+    with pytest.raises(FragmintError) as excinfo:
+        codec_for("yaml").load("1: x\n", path=bad)
+    message = str(excinfo.value)
+    assert str(bad) in message
+    assert "1" in message
+
+
+def test_yaml_load_rejects_boolean_key(tmp_path: Path) -> None:
+    with pytest.raises(FragmintError) as excinfo:
+        codec_for("yaml").load("true: x\n", path=tmp_path / "f.yaml")
+    assert "True" in str(excinfo.value) or "true" in str(excinfo.value)
+
+
+def test_yaml_load_rejects_null_key(tmp_path: Path) -> None:
+    with pytest.raises(FragmintError) as excinfo:
+        codec_for("yaml").load("null: x\n", path=tmp_path / "f.yaml")
+    assert "None" in str(excinfo.value) or "null" in str(excinfo.value)
+
+
+def test_yaml_load_rejects_integer_key_nested_in_a_mapping(tmp_path: Path) -> None:
+    with pytest.raises(FragmintError) as excinfo:
+        codec_for("yaml").load("a:\n  1: x\n", path=tmp_path / "f.yaml")
+    assert "/a" in str(excinfo.value)
+
+
+def test_yaml_load_rejects_integer_key_nested_in_a_list(tmp_path: Path) -> None:
+    with pytest.raises(FragmintError) as excinfo:
+        codec_for("yaml").load("a:\n  - 1: x\n", path=tmp_path / "f.yaml")
+    assert "/a/0" in str(excinfo.value)
+
+
+def test_yaml_load_does_not_collapse_int_and_string_keys(tmp_path: Path) -> None:
+    """Before the fix, `_normalize`'s `str(key)` coercion made an int key `1`
+    and a string key `'1'` collide, with the later value silently winning —
+    data loss with no diagnostic. Now the int key is rejected before that can
+    happen."""
+    with pytest.raises(FragmintError) as excinfo:
+        codec_for("yaml").load("1: first\n'1': second\n", path=tmp_path / "f.yaml")
+    assert "1" in str(excinfo.value)
+
+
+def test_yaml_load_duplicate_key_diagnostic_names_int_and_bool_ambiguity(
+    tmp_path: Path,
+) -> None:
+    """Sibling keys `1` and `true` are rejected by ruamel as *duplicate* keys
+    before `_normalize` ever runs, because `1 == True` in Python. The bare
+    ruamel message ('found duplicate key "True"') does not explain that the
+    original key was spelled `1`; the wrapped message must add that
+    explanation rather than merely repeating ruamel's."""
+    with pytest.raises(FragmintError) as excinfo:
+        codec_for("yaml").load("1: x\ntrue: y\n", path=tmp_path / "f.yaml")
+    message = str(excinfo.value)
+    assert "collide" in message
+
+
+def test_yaml_load_accepts_ordinary_string_keys(tmp_path: Path) -> None:
+    data = codec_for("yaml").load("a: 1\nb.c: 2\nd/e: 3\n", path=tmp_path / "f.yaml")
+    assert data == {"a": 1, "b.c": 2, "d/e": 3}
+
+
+def test_yaml_load_accepts_a_quoted_numeric_looking_string_key(tmp_path: Path) -> None:
+    data = codec_for("yaml").load("'1': x\n", path=tmp_path / "f.yaml")
+    assert data == {"1": "x"}
+
+
 # --- TOML: date/time input rejection -------------------------------------------
 
 

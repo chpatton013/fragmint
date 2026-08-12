@@ -82,6 +82,16 @@ The tool's own documents — the inventory (`targets.yaml`), module documents
 These are authored once per project and read only by fragmint itself, not
 data the tool renders, so multi-format support does not extend to them.
 
+**Mapping keys are always strings.** JSON and TOML require this syntactically
+already. YAML alone admits a bare key that resolves to a non-string type —
+`1`, `true`, `null`, and the like — and loading one is a fail-closed error
+naming the file and the offending key, telling the author to quote it (`'1'`
+rather than `1`). A YAML parser resolves a key's type before comparing keys
+for uniqueness, so `1` and `true` (or `0` and `false`) are the same mapping
+key even though they are spelled differently; coercing every key to a string
+after the fact would let `1: a` and `'1': b` collapse into one key, with one
+value silently discarding the other.
+
 **The independence rule.** The input format constrains what a fragment can
 say; the output format constrains what a document can mean. They meet only
 through the values in between — a `.toml` fragment and a `.yaml` fragment
