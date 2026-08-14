@@ -1,5 +1,7 @@
 # fragmint — Structured Document Fragment Composer
 
+[![ci](https://github.com/chpatton013/fragmint/actions/workflows/ci.yml/badge.svg)](https://github.com/chpatton013/fragmint/actions/workflows/ci.yml)
+
 Render structured documents — YAML, TOML, or JSON — from an inventory of
 **targets**, an ordered sequence of reusable **fragments**, per-target
 **variables**, and **explicit path-based merge operations**.
@@ -1937,3 +1939,16 @@ precedence and ordering), `test_sources.py` (variable value sources),
 `tests/fixtures/expected/`), and `test_cli.py` (command surface and exit
 codes). Capture tests use a stubbed `CommandRunner` — no test should spawn a
 real subprocess.
+
+## License
+
+`fragmint` is licensed under the terms of the MIT License, as described in
+[LICENSE.md](LICENSE.md).
+
+## Contributing
+
+Contributions are welcome in the form of bug reports, feature requests, or pull
+requests.
+
+Contribution to `fragmint` is organized under the terms of the [Contributor
+Covenant](CONTRIBUTOR_COVENANT.md).
