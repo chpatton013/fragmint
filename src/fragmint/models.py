@@ -62,18 +62,33 @@ class CaptureSource:
     """``{from: capture, command: [...], stdin: <source?>, trim: bool}``.
 
     Runs a subprocess (argv list, never a shell) and uses its stdout. Each
-    element of ``command`` and the optional ``stdin`` are themselves sources
-    (literal or secret), so arguments/stdin can come from literals or secrets.
+    element of ``command`` and the optional ``stdin`` are nested sources.
+    Variable aliases are valid only as a variable's own source.
     ``trim`` strips a single trailing newline (default ``True``).
     """
 
-    command: tuple[VariableSource, ...]
-    stdin: VariableSource | None = None
+    command: tuple[CaptureInputSource, ...]
+    stdin: CaptureInputSource | None = None
     trim: bool = True
 
 
+#: A source valid for capture command arguments and standard input.
+CaptureInputSource = LiteralSource | SecretSource | CaptureSource
+
+
+@dataclass(frozen=True)
+class VariableReferenceSource:
+    """``{from: variable, name: NAME}`` — an alias of another variable.
+
+    Resolution stays in :class:`fragmint.render.RenderSession`, which owns the
+    layered variable map and per-scope memoization/cycle detection.
+    """
+
+    name: str
+
+
 #: A parsed variable value source. See :mod:`sources`.
-VariableSource = LiteralSource | SecretSource | CaptureSource
+VariableSource = LiteralSource | SecretSource | CaptureSource | VariableReferenceSource
 
 
 @dataclass(frozen=True)

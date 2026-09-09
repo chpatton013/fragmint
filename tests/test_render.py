@@ -24,6 +24,7 @@ from fragmint.errors import (
     SerializationError,
     TemplateRenderError,
     ValidationError,
+    VariableResolutionError,
 )
 from fragmint.models import OutputSpec, RenderedOutput
 
@@ -980,6 +981,200 @@ operations:
     assert set(result.outputs) == {"out-a", "out-b"}
     session.render_aggregate("combined")
 
+    assert len(stub_runner.calls) == 1
+
+
+def test_variable_aliases_share_a_capture_and_follow_layering(closure_from_tree, stub_runner) -> None:
+    """Aliases resolve the final layered source and share its one capture."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  credentials:
+    path: "credentials-{target}"
+defaults:
+  variables:
+    password_hash: default-hash
+    admin_password_hash:
+      from: variable
+      name: password_hash
+    operator_password_hash:
+      from: variable
+      name: password_hash
+targets:
+  t1:
+    outputs:
+      credentials:
+        fragments: [passwords]
+    variables:
+      password_hash:
+        from: capture
+        command: [echo, hash]
+""",
+            "fragments/passwords.yaml": """
+fragment:
+  version: 1
+  description: shares a password hash between accounts
+operations:
+  - op: set
+    path: /admin/password
+    value: "{{ admin_password_hash }}"
+  - op: set
+    path: /operator/password
+    value: "{{ operator_password_hash }}"
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    result = session.render_target_outputs("t1")
+
+    assert result.outputs["credentials"].document == {
+        "admin": {"password": "$6$stubsalt$stubhash"},
+        "operator": {"password": "$6$stubsalt$stubhash"},
+    }
+    assert len(stub_runner.calls) == 1
+
+
+def test_variable_aliases_are_lazy_and_redacted(closure_from_tree, stub_runner) -> None:
+    """An unused alias neither resolves its source nor exposes a capture."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  main:
+    path: "main-{target}"
+targets:
+  t1:
+    outputs:
+      main:
+        fragments: [mark]
+    variables:
+      password_hash:
+        from: capture
+        command: [echo, hash]
+      admin_password_hash:
+        from: variable
+        name: password_hash
+""",
+            "fragments/mark.yaml": """
+fragment:
+  version: 1
+  description: does not consume credentials
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    assert session.render_target_outputs("t1").outputs["main"].document == {"value": 1}
+    assert stub_runner.calls == []
+    assert render_mod.redact_variables(session.resolve("t1").variables)[
+        "admin_password_hash"
+    ] == "<variable password_hash>"
+
+    redacted_session = render_mod.RenderSession(closure, runner=stub_runner, redact_sources=True)
+    assert redacted_session.variable("t1", "admin_password_hash") == "<variable password_hash>"
+    assert stub_runner.calls == []
+
+
+def test_variable_alias_cycle_fails_closed_with_the_cycle(closure_from_tree, stub_runner) -> None:
+    """A cyclic alias chain never recurses indefinitely or runs a source."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  main:
+    path: "main-{target}"
+targets:
+  t1:
+    outputs:
+      main:
+        fragments: [use-value]
+    variables:
+      first:
+        from: variable
+        name: second
+      second:
+        from: variable
+        name: first
+""",
+            "fragments/use-value.yaml": """
+fragment:
+  version: 1
+  description: consumes the cyclic alias
+operations:
+  - op: set
+    path: /value
+    value: "{{ first }}"
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+
+    with pytest.raises(VariableResolutionError, match="first -> second -> first"):
+        session.render_target_outputs("t1")
+    assert stub_runner.calls == []
+
+
+def test_aggregate_variable_aliases_use_the_aggregate_scope(closure_from_tree, stub_runner) -> None:
+    """An aggregate alias cannot read a target's same-named variable."""
+    closure = closure_from_tree(
+        {
+            "targets.yaml": """
+version: 1
+outputs:
+  combined:
+    scope: aggregate
+    path: combined.yaml
+aggregate:
+  variables:
+    password_hash:
+      from: capture
+      command: [echo, hash]
+    admin_password_hash:
+      from: variable
+      name: password_hash
+  outputs:
+    combined:
+      epilogue: [set-password]
+targets:
+  t1:
+    outputs:
+      combined:
+        fragments: [mark]
+    variables:
+      password_hash: target-hash
+""",
+            "fragments/mark.yaml": """
+fragment:
+  version: 1
+  description: contributes the aggregate output
+operations:
+  - op: set
+    path: /value
+    value: 1
+""",
+            "fragments/set-password.yaml": """
+fragment:
+  version: 1
+  description: consumes the aggregate alias
+operations:
+  - op: set
+    path: /admin/password
+    value: "{{ admin_password_hash }}"
+""",
+        }
+    )
+    session = render_mod.RenderSession(closure, runner=stub_runner)
+    rendered = session.render_aggregate("combined")
+
+    assert rendered is not None
+    assert rendered.document["admin"] == {"password": "$6$stubsalt$stubhash"}
     assert len(stub_runner.calls) == 1
 
 

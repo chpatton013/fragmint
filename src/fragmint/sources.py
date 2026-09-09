@@ -2,8 +2,9 @@
 
 A variable value may be a plain literal (the default) or a tagged *source*.
 It is resolved after the normal defaults/group/target/CLI layering, at first
-use during templating. See README.md "Variable value sources" and
-"Resolution timing".
+use during templating. A variable source may alias another variable in the
+same scope; the render session owns that scoped lookup. See README.md
+"Variable value sources" and "Resolution timing".
 
 Syntax (``from:`` discriminator). A mapping is treated as a source only when it
 has a ``from`` key whose value is one of ``literal``, ``secret``, ``capture``;
@@ -16,23 +17,29 @@ literal.
       from: secret
       name: gb10_password
 
-    identity_password_hash:                  # subprocess capture
+    password_hash:                           # subprocess capture
       from: capture
       command: [openssl, passwd, -6, -stdin]
       stdin: { from: secret, name: gb10_password }
       trim: true                             # strip trailing newline (default)
 
+    admin_password_hash:                     # aliases the capture above
+      from: variable
+      name: password_hash
+
     weird_literal:                           # escape hatch for a literal mapping
       from: literal                          #   that itself contains a `from` key
       value: { from: "us-east-1" }
 
-Sources nest: a capture's ``stdin`` and each element of its ``command`` are
-themselves sources (literal or secret). Variables do NOT reference other
-variables in this version.
+Sources nest: a capture's ``stdin`` and each element of its ``command`` may
+be a source. A variable may alias another variable in the same resolution
+scope through ``from: variable``; aliases are not valid capture inputs.
 
 Security (enforced here so it can be reviewed in one place):
 - subprocesses run with an argv list and ``shell=False`` — no shell parsing;
 - resolved secret values and secret-sourced arguments/stdin are NEVER logged;
+- aliases resolve only through the render session's scoped lookup, so they
+  cannot bypass layering or redaction;
 - a bounded timeout applies; failures raise :class:`~errors.CaptureError` with
   the command name and stderr, secret-sourced args redacted.
 
@@ -44,16 +51,18 @@ instead of running real programs (see ``tests/test_sources.py``).
 from __future__ import annotations
 
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Protocol
 
 from .errors import CaptureError, ModuleError, SecretNotFoundError
 from .models import (
+    CaptureInputSource,
     CaptureSource,
     DataValue,
     LiteralSource,
     SecretSource,
     SecretStore,
+    VariableReferenceSource,
     VariableSource,
 )
 
@@ -62,7 +71,7 @@ DEFAULT_CAPTURE_TIMEOUT = 30.0
 
 #: The discriminator key and its recognized values.
 DISCRIMINATOR = "from"
-SOURCE_KINDS = ("literal", "secret", "capture")
+SOURCE_KINDS = ("literal", "secret", "capture", "variable")
 
 
 class CommandRunner(Protocol):
@@ -121,15 +130,15 @@ def is_source(raw: DataValue) -> bool:
     return isinstance(kind, str) and kind in SOURCE_KINDS
 
 
-def parse_source(raw: DataValue) -> VariableSource:
+def parse_source(raw: DataValue, *, allow_variable_reference: bool = True) -> VariableSource:
     """Parse a raw variable value into a :class:`~models.VariableSource`.
 
     Untagged values become a ``LiteralSource``. A tagged mapping is validated
     for its kind (correct fields present, ``command`` non-empty for capture,
-    ``name`` present for secret) and its nested ``command``/``stdin`` sources
-    are parsed recursively. Raise :class:`~errors.VariableResolutionError` (or
-    :class:`~errors.ModuleError` for a structurally invalid source) with the
-    offending shape described.
+    ``name`` present for secret/variable) and its nested ``command``/``stdin``
+    sources are parsed recursively. Variable references are only valid as a
+    variable's own source, not inside capture input. Raise
+    :class:`~errors.ModuleError` for an invalid shape.
     """
     if not is_source(raw):
         return LiteralSource(value=raw)
@@ -147,15 +156,23 @@ def parse_source(raw: DataValue) -> VariableSource:
             raise ModuleError("invalid `from: secret` source: missing or empty `name` field")
         return SecretSource(name=name)
 
+    if kind == "variable":
+        if not allow_variable_reference:
+            raise ModuleError("invalid capture source: `from: variable` is not allowed here")
+        name = raw.get("name")
+        if not isinstance(name, str) or not name:
+            raise ModuleError("invalid `from: variable` source: missing or empty `name` field")
+        return VariableReferenceSource(name=name)
+
     if kind == "capture":
         command_raw = raw.get("command")
         if not isinstance(command_raw, list) or not command_raw:
             raise ModuleError(
                 "invalid `from: capture` source: `command` must be a non-empty list"
             )
-        command = tuple(parse_source(item) for item in command_raw)
+        command = tuple(_parse_capture_input(item) for item in command_raw)
         stdin_raw = raw.get("stdin")
-        stdin = parse_source(stdin_raw) if stdin_raw is not None else None
+        stdin = _parse_capture_input(stdin_raw) if stdin_raw is not None else None
         trim_raw = raw.get("trim", True)
         if not isinstance(trim_raw, bool):
             raise ModuleError("invalid `from: capture` source: `trim` must be a boolean")
@@ -166,6 +183,14 @@ def parse_source(raw: DataValue) -> VariableSource:
 
 def _is_sensitive(source: VariableSource) -> bool:
     return isinstance(source, (SecretSource, CaptureSource))
+
+
+def _parse_capture_input(raw: DataValue) -> CaptureInputSource:
+    """Parse one capture input without admitting a variable alias there."""
+    source = parse_source(raw, allow_variable_reference=False)
+    if isinstance(source, (LiteralSource, SecretSource, CaptureSource)):
+        return source
+    raise AssertionError("capture input parser returned a variable reference")
 
 
 def _redact_source_for_error(source: VariableSource) -> str:
@@ -180,6 +205,8 @@ def _redact_source_for_error(source: VariableSource) -> str:
     if isinstance(source, CaptureSource):
         parts = [_redact_source_for_error(part) for part in source.command]
         return f"<capture: {' '.join(parts)}>"
+    if isinstance(source, VariableReferenceSource):
+        return f"<variable {source.name}>"
     return "<unknown>"
 
 
@@ -192,6 +219,7 @@ def resolve_source(
     variable: str,
     timeout: float = DEFAULT_CAPTURE_TIMEOUT,
     redact: bool = False,
+    resolve_reference: Callable[[str], DataValue] | None = None,
 ) -> DataValue:
     """Resolve a single source to a concrete value.
 
@@ -202,6 +230,8 @@ def resolve_source(
     - ``CaptureSource`` -> recursively resolve each ``command`` element (to
       strings) and ``stdin``, run via ``runner``, then strip one trailing
       newline when ``trim``. Raise :class:`~errors.CaptureError` on failure.
+    - ``VariableReferenceSource`` -> delegate to ``resolve_reference``, which
+      is supplied by the scoped render session.
 
     ``scope`` is an already-formatted, display-ready label for where this
     resolution is happening — e.g. ``"target 't1'"`` for a target's own
@@ -209,19 +239,25 @@ def resolve_source(
     (which has no target). Callers own the exact wording; this module only
     prefixes it onto the message.
 
-    When ``redact`` is true, a ``SecretSource``/``CaptureSource`` resolves to
-    its non-executing description (``<secret NAME>`` / ``<capture: ...>``)
-    WITHOUT looking up the secret store or running any subprocess. This is what
-    ``explain`` uses so it can build the document for provenance without
-    executing captures or revealing secrets (README.md "Resolution timing").
+    When ``redact`` is true, a secret, capture, or variable reference resolves
+    to a non-executing description (``<secret NAME>``, ``<capture: ...>``, or
+    ``<variable NAME>``) WITHOUT looking up the secret store, following an
+    alias, or running a subprocess. This is what ``explain`` uses so it can
+    build the document for provenance without executing captures or revealing
+    secrets (README.md "Resolution timing").
 
     Never log resolved secret values or secret-sourced arguments.
     """
-    if redact and isinstance(source, (SecretSource, CaptureSource)):
+    if redact and isinstance(source, (SecretSource, CaptureSource, VariableReferenceSource)):
         return _redact_source_for_error(source)
 
     if isinstance(source, LiteralSource):
         return source.value
+
+    if isinstance(source, VariableReferenceSource):
+        if resolve_reference is None:
+            raise ModuleError("variable references require a scoped variable resolver")
+        return resolve_reference(source.name)
 
     if isinstance(source, SecretSource):
         if source.name not in secrets.secrets:
@@ -241,6 +277,7 @@ def resolve_source(
                 scope=scope,
                 variable=variable,
                 timeout=timeout,
+                resolve_reference=resolve_reference,
             )
             argv.append(str(resolved))
 
@@ -253,6 +290,7 @@ def resolve_source(
                 scope=scope,
                 variable=variable,
                 timeout=timeout,
+                resolve_reference=resolve_reference,
             )
             stdin_text = str(resolved_stdin)
 
@@ -316,6 +354,8 @@ def describe_source(raw: DataValue) -> str:
     if isinstance(source, CaptureSource):
         parts = [_redact_source_for_error(part) for part in source.command]
         return f"<capture: {' '.join(parts)}>"
+    if isinstance(source, VariableReferenceSource):
+        return f"<variable {source.name}>"
     if isinstance(source, LiteralSource):
         return repr(source.value)
     return "<unknown>"

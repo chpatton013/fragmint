@@ -873,10 +873,10 @@ consume (see "Resolution timing").
 
 ## Variable value sources
 
-A variable's value is one of three sources, distinguished by an optional
+A variable's value is one of four sources, distinguished by an optional
 `from:` key. A mapping is a source only when its `from` value is one of
-`literal`, `secret`, or `capture`; anything else (scalar, list, or mapping
-without that discriminator) is a literal.
+`literal`, `secret`, `capture`, or `variable`; anything else (scalar, list, or
+mapping without that discriminator) is a literal.
 
 ```yaml
 keyboard_layout: us                       # literal (unchanged)
@@ -885,11 +885,19 @@ identity_password:                        # secret reference
   from: secret
   name: gb10-01_password
 
-identity_password_hash:                   # subprocess capture
+password_hash:                            # subprocess capture
   from: capture
-  command: [openssl, passwd, -6, -stdin]  # each element may itself be a source
+  command: [openssl, passwd, -6, -stdin]  # each element may be a nested source
   stdin: { from: secret, name: gb10-01_password }
   trim: true                              # strip one trailing newline (default)
+
+admin_password_hash:                      # shares the capture above
+  from: variable
+  name: password_hash
+
+operator_password_hash:
+  from: variable
+  name: password_hash
 
 weird_literal:                            # escape hatch: a literal mapping that
   from: literal                           #   itself contains a `from` key
@@ -902,12 +910,11 @@ weird_literal:                            # escape hatch: a literal mapping that
   store (see "Secrets" below). A missing name fails closed
   (`SecretNotFoundError`).
 - **capture** — `{from: capture, command: [...], stdin: <source?>, trim: bool}`
-  runs a subprocess and uses its stdout. Sources **nest**: each `command`
-  element and the optional `stdin` are themselves sources (literal or
-  secret), so arguments and stdin can come from literals or secrets.
-
-Variables do not reference other variables in this version (a possible future
-extension).
+  runs a subprocess and uses its stdout. Each `command` element and optional
+  `stdin` may be a nested source; variable aliases are not allowed there.
+- **variable** — `{from: variable, name: NAME}` aliases another variable in
+  the same target or aggregate scope. It resolves that scope's final layered
+  definition, so multiple aliases share one secret lookup or capture.
 
 ### Security
 
@@ -917,8 +924,9 @@ extension).
   raises `CaptureError` with the command name and stderr, and secret-sourced
   arguments redacted.
 - Resolved secret values and secret-sourced arguments/stdin are never logged.
-- A variable defined via `secret` or `capture` is treated as sensitive and
-  redacted in `inspect`/`explain` regardless of its name.
+- A variable defined via `secret`, `capture`, or `variable` is treated as a
+  source and shown only as a non-executing description in `inspect`/`explain`.
+  An alias never reveals its referenced value.
 
 ### Determinism
 
@@ -942,7 +950,9 @@ NAME` (see "Aggregate outputs" and "CLI usage") a usable fast-iteration loop
 even when other outputs need secrets or captures `NAME` doesn't. Each
 variable resolves at most once per target for the life of a single command.
 `requires: variables:` (see "Authoring fragments") asserts that a variable is
-*defined*; it does not force it to resolve.
+*defined*; it does not force it to resolve. An alias resolves its referenced
+variable only when the alias itself is demanded. Missing references and alias
+cycles fail closed with the scope and reference chain.
 
 `inspect` and `explain` do **not** execute captures or reveal secrets — they
 show a redacted description such as `<capture: openssl passwd -6 -stdin>` or
@@ -1285,10 +1295,11 @@ A `RenderSession` (one per run — a single CLI invocation, or an aggregate
 output, which by construction visits every target) loads the import closure
 and flattens it once (README.md "The module model"), then memoizes, for the
 life of the session: each target's layered variable definitions; each
-variable's resolved value, on demand and per `(target, variable)` — so a
-capture subprocess runs at most once per target regardless of how many
-outputs (per-target or aggregate) demand the variable it produces, and a
-variable no rendered output's fragments reference is never resolved at all
+variable's resolved value, on demand and per `(target, variable)` — aliases
+resolve the final layered source through the same cache, so a capture subprocess
+runs at most once per target regardless of how many variables or outputs
+(per-target or aggregate) demand it, and a variable no rendered output's
+fragments reference is never resolved at all
 (see "Resolution timing"); and each loaded fragment (keyed by its resolved
 reference, so two modules may both contain a same-named fragment without
 colliding), so a fragment shared by many targets is read and schema-validated

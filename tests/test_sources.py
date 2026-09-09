@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import pytest
 
-from fragmint.errors import CaptureError, SecretNotFoundError
+from fragmint.errors import CaptureError, ModuleError, SecretNotFoundError
 from fragmint.models import (
     CaptureSource,
+    DataValue,
     LiteralSource,
     SecretSource,
     SecretStore,
+    VariableReferenceSource,
 )
 from fragmint.sources import (
     describe_source,
@@ -41,9 +43,28 @@ def test_from_literal_escape_hatch() -> None:
 
 def test_mapping_with_nonreserved_from_is_literal() -> None:
     """`{from: us-east-1}` is a literal, not a source (from value not reserved)."""
-    raw = {"from": "us-east-1"}
+    raw: DataValue = {"from": "us-east-1"}
     assert is_source(raw) is False
     assert parse_source(raw) == LiteralSource(value=raw)
+
+
+def test_variable_reference_source_is_a_redacted_alias_description() -> None:
+    """`from: variable` names another variable without exposing its value."""
+    raw: DataValue = {"from": "variable", "name": "password_hash"}
+    assert is_source(raw) is True
+    assert parse_source(raw) == VariableReferenceSource(name="password_hash")
+    assert describe_source(raw) == "<variable password_hash>"
+
+
+def test_capture_inputs_reject_variable_references() -> None:
+    """Capture argv/stdin reject variable aliases."""
+    with pytest.raises(ModuleError, match="not allowed here"):
+        parse_source(
+            {
+                "from": "capture",
+                "command": [{"from": "variable", "name": "password_hash"}],
+            }
+        )
 
 
 def test_secret_resolves_from_store() -> None:

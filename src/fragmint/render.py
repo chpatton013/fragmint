@@ -47,6 +47,7 @@ from .errors import (
     ModuleError,
     SerializationError,
     TemplateRenderError,
+    VariableResolutionError,
 )
 from .inventory import RESERVED_VARIABLE_NAMES, load_secret_store, resolve_target
 from .models import (
@@ -246,9 +247,11 @@ class RenderSession:
         self._resolved: dict[str, ResolvedTarget] = {}
         self._sources: dict[str, dict[str, VariableSource]] = {}
         self._values: dict[tuple[str, str], DataValue | BaseException] = {}
+        self._resolving: dict[str, list[str]] = {}
         self._fragments: dict[Ref, Fragment] = {}
         self._aggregate_source_map: dict[str, VariableSource] | None = None
         self._aggregate_values: dict[str, DataValue | BaseException] = {}
+        self._aggregate_resolving: list[str] = []
         self._runner: CommandRunner = runner if runner is not None else sources.DefaultCommandRunner()
 
     def resolve(self, target_name: str) -> ResolvedTarget:
@@ -275,27 +278,45 @@ class RenderSession:
         return self._sources[target_name]
 
     def variable(self, target_name: str, name: str) -> DataValue:
-        """Resolve one variable's value source for ``target_name`` — secret
-        lookup or capture execution — memoized per ``(target_name, name)``
-        for the life of the session, including failures: a repeat demand for
-        a variable whose resolution previously raised re-raises the same
-        exception without looking anything up or running anything again.
-        This is what keeps a capture subprocess running at most once per
-        target per session, shared across every output that demands the
-        variable it produces (README.md "Resolution timing")."""
+        """Resolve one target-scoped variable, including aliases, on demand.
+
+        Values and failures are memoized per ``(target, variable)``. An alias
+        delegates to this method so it resolves the final layered definition,
+        shares an already-resolved capture with every alias, and detects cycles
+        before recursion can escape the session boundary.
+        """
         key = (target_name, name)
         if key not in self._values:
+            parsed = self._parsed_sources(target_name)
+            if name not in parsed:
+                raise VariableResolutionError(
+                    f"target {target_name!r}: variable {name!r}: referenced variable is not defined"
+                )
+
+            resolving = self._resolving.setdefault(target_name, [])
+            if name in resolving:
+                cycle = [*resolving[resolving.index(name) :], name]
+                raise VariableResolutionError(
+                    f"target {target_name!r}: variable alias cycle: {' -> '.join(cycle)}"
+                )
+
+            resolving.append(name)
             try:
                 self._values[key] = sources.resolve_source(
-                    self._parsed_sources(target_name)[name],
+                    parsed[name],
                     secrets=self.store,
                     runner=self._runner,
                     scope=f"target {target_name!r}",
                     variable=name,
                     redact=self.redact_sources,
+                    resolve_reference=lambda reference: self.variable(target_name, reference),
                 )
             except Exception as exc:  # noqa: BLE001 - memoized and re-raised below, on every repeat demand
                 self._values[key] = exc
+            finally:
+                resolving.pop()
+                if not resolving:
+                    del self._resolving[target_name]
         value = self._values[key]
         if isinstance(value, BaseException):
             raise value
@@ -342,23 +363,38 @@ class RenderSession:
         return self._aggregate_source_map
 
     def _aggregate_variable(self, name: str) -> DataValue:
-        """Resolve one aggregate-scope variable by name — secret lookup or
-        capture execution — memoized for the life of the session. The
-        aggregate-scope analogue of :meth:`variable`; ``target`` is not a
-        valid name here since it is never part of this scope (README.md
-        "Aggregate outputs" — "The aggregate scope")."""
+        """Resolve one aggregate-scoped variable, including aliases, on demand.
+
+        This mirrors :meth:`variable` without a target: aliases share the
+        aggregate scope's memoized source and report an aggregate-local cycle.
+        """
         if name not in self._aggregate_values:
+            parsed = self._aggregate_sources()
+            if name not in parsed:
+                raise VariableResolutionError(
+                    f"aggregate scope: variable {name!r}: referenced variable is not defined"
+                )
+            if name in self._aggregate_resolving:
+                cycle = [*self._aggregate_resolving[self._aggregate_resolving.index(name) :], name]
+                raise VariableResolutionError(
+                    f"aggregate scope: variable alias cycle: {' -> '.join(cycle)}"
+                )
+
+            self._aggregate_resolving.append(name)
             try:
                 self._aggregate_values[name] = sources.resolve_source(
-                    self._aggregate_sources()[name],
+                    parsed[name],
                     secrets=self.store,
                     runner=self._runner,
                     scope="aggregate scope",
                     variable=name,
                     redact=self.redact_sources,
+                    resolve_reference=self._aggregate_variable,
                 )
             except Exception as exc:  # noqa: BLE001 - memoized and re-raised below, on every repeat demand
                 self._aggregate_values[name] = exc
+            finally:
+                self._aggregate_resolving.pop()
         value = self._aggregate_values[name]
         if isinstance(value, BaseException):
             raise value
